@@ -149,12 +149,10 @@ class IrSequence(models.Model):
             _create_sequence(self._cr, "ir_sequence_%03d" % seq.id, values.get('number_increment', 1), values.get('number_next', 1))
         return seq
 
-    @api.multi
     def unlink(self):
         _drop_sequences(self._cr, ["ir_sequence_%03d" % x.id for x in self])
         return super(IrSequence, self).unlink()
 
-    @api.multi
     def write(self, values):
         new_implementation = values.get('implementation')
         for seq in self:
@@ -181,7 +179,10 @@ class IrSequence(models.Model):
                     _create_sequence(self._cr, "ir_sequence_%03d" % seq.id, i, n)
                     for sub_seq in seq.date_range_ids:
                         _create_sequence(self._cr, "ir_sequence_%03d_%03d" % (seq.id, sub_seq.id), i, n)
-        return super(IrSequence, self).write(values)
+        res = super(IrSequence, self).write(values)
+        # DLE P179
+        self.flush(values.keys())
+        return res
 
     def _next_do(self):
         if self.implementation == 'standard':
@@ -253,7 +254,6 @@ class IrSequence(models.Model):
             seq_date = self._create_date_range_seq(dt)
         return seq_date.with_context(ir_sequence_date_range=seq_date.date_from)._next()
 
-    @api.multi
     def next_by_id(self, sequence_date=None):
         """ Draw an interpolated string using the specified sequence."""
         self.check_access_rights('read')
@@ -349,7 +349,6 @@ class IrSequenceDateRange(models.Model):
             number_next = _update_nogap(self, self.sequence_id.number_increment)
         return self.sequence_id.get_next_char(number_next)
 
-    @api.multi
     def _alter_sequence(self, number_increment=None, number_next=None):
         for seq in self:
             _alter_sequence(self._cr, "ir_sequence_%03d_%03d" % (seq.sequence_id.id, seq.id), number_increment=number_increment, number_next=number_next)
@@ -364,14 +363,22 @@ class IrSequenceDateRange(models.Model):
             _create_sequence(self._cr, "ir_sequence_%03d_%03d" % (main_seq.id, seq.id), main_seq.number_increment, values.get('number_next_actual', 1))
         return seq
 
-    @api.multi
     def unlink(self):
         _drop_sequences(self._cr, ["ir_sequence_%03d_%03d" % (x.sequence_id.id, x.id) for x in self])
         return super(IrSequenceDateRange, self).unlink()
 
-    @api.multi
     def write(self, values):
         if values.get('number_next'):
             seq_to_alter = self.filtered(lambda seq: seq.sequence_id.implementation == 'standard')
             seq_to_alter._alter_sequence(number_next=values.get('number_next'))
-        return super(IrSequenceDateRange, self).write(values)
+        # DLE P179: `test_in_invoice_line_onchange_sequence_number_1`
+        # _update_nogap do a select to get the next sequence number_next
+        # When changing (writing) the number next of a sequence, the number next must be flushed before doing the select.
+        # Normally in such a case, we flush just above the execute, but for the sake of performance
+        # I believe this is better to flush directly in the write:
+        #  - Changing the number next of a sequence is really really rare,
+        #  - But selecting the number next happens a lot,
+        # Therefore, if I chose to put the flush just above the select, it would check the flush most of the time for no reason.
+        res = super(IrSequenceDateRange, self).write(values)
+        self.flush(values.keys())
+        return res

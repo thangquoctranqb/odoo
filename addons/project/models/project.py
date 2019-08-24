@@ -48,7 +48,6 @@ class ProjectTaskType(models.Model):
             " * A good feedback from the customer will update the kanban state to 'ready for the new stage' (green bullet).\n"
             " * A medium or a bad feedback will set the kanban state to 'blocked' (red bullet).\n")
 
-    @api.multi
     def unlink(self):
         stages = self
         default_project_id = self.env.context.get('default_project_id')
@@ -94,7 +93,6 @@ class Project(models.Model):
         for project in self:
             project.task_count = result.get(project.id, 0)
 
-    @api.multi
     def attachment_tree_view(self):
         self.ensure_one()
         domain = [
@@ -166,10 +164,11 @@ class Project(models.Model):
     active = fields.Boolean(default=True,
         help="If the active field is set to False, it will allow you to hide the project without removing it.")
     sequence = fields.Integer(default=10, help="Gives the sequence order when displaying a list of Projects.")
-    partner_id = fields.Many2one('res.partner', string='Customer', auto_join=True, tracking=True)
+    partner_id = fields.Many2one('res.partner', string='Customer', auto_join=True, tracking=True, domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]")
     company_id = fields.Many2one('res.company', string='Company', required=True, default=lambda self: self.env.company)
     currency_id = fields.Many2one('res.currency', related="company_id.currency_id", string="Currency", readonly=True)
     analytic_account_id = fields.Many2one('account.analytic.account', string="Analytic Account", copy=False, ondelete='set null',
+        domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]",
         help="Analytic account to which this project is linked for financial management. "
              "Use an analytic account to record cost and revenue on your project.")
 
@@ -184,6 +183,7 @@ class Project(models.Model):
     resource_calendar_id = fields.Many2one(
         'resource.calendar', string='Working Time',
         default=lambda self: self.env.company.resource_calendar_id.id,
+        domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]",
         help="Timetable working hours to adjust the gantt diagram report")
     type_ids = fields.Many2many('project.task.type', 'project_task_type_rel', 'project_id', 'type_id', string='Tasks Stages')
     task_count = fields.Integer(compute='_compute_task_count', string="Task Count")
@@ -211,6 +211,7 @@ class Project(models.Model):
     date_start = fields.Date(string='Start Date')
     date = fields.Date(string='Expiration Date', index=True, tracking=True)
     subtask_project_id = fields.Many2one('project.project', string='Sub-task Project', ondelete="restrict",
+        domain="[('company_id', '=', company_id)]",
         help="Project in which sub-tasks of the current project will be created. It can be the current project itself.")
 
     # rating fields
@@ -224,7 +225,7 @@ class Project(models.Model):
         ('monthly', 'Once a Month'), ('quarterly', 'Quarterly'), ('yearly', 'Yearly')
     ], 'Rating Frequency')
 
-    portal_show_rating = fields.Boolean('Rating visible publicly', copy=False, oldname='website_published')
+    portal_show_rating = fields.Boolean('Rating visible publicly', copy=False)
 
     _sql_constraints = [
         ('project_date_greater', 'check(date >= date_start)', 'Error! project start-date must be lower than project end-date.')
@@ -255,7 +256,6 @@ class Project(models.Model):
             'name': task.name,
         }
 
-    @api.multi
     def map_tasks(self, new_project_id):
         """ copy and map tasks from old to new project """
         tasks = self.env['project.task']
@@ -267,14 +267,13 @@ class Project(models.Model):
             defaults = self._map_tasks_default_valeus(task)
             if task.parent_id:
                 # set the parent to the duplicated task
-                defaults['parent_id'] = old_to_new_tasks[task.parent_id.id]
+                defaults['parent_id'] = old_to_new_tasks.get(task.parent_id.id, False)
             new_task = task.copy(defaults)
             old_to_new_tasks[task.id] = new_task.id
             tasks += new_task
 
         return self.browse(new_project_id).write({'tasks': [(6, 0, tasks.ids)]})
 
-    @api.multi
     @api.returns('self', lambda value: value.id)
     def copy(self, default=None):
         if default is None:
@@ -301,7 +300,6 @@ class Project(models.Model):
             project.message_subscribe(project.partner_id.ids)
         return project
 
-    @api.multi
     def write(self, vals):
         # directly compute is_favorite to dodge allow write access right
         if 'is_favorite' in vals:
@@ -316,7 +314,6 @@ class Project(models.Model):
                 project.message_subscribe(project.partner_id.ids)
         return res
 
-    @api.multi
     def unlink(self):
         # Check project is empty
         for project in self:
@@ -331,7 +328,6 @@ class Project(models.Model):
         analytic_accounts_to_delete.unlink()
         return result
 
-    @api.multi
     def message_subscribe(self, partner_ids=None, channel_ids=None, subtype_ids=None):
         """ Subscribe to all existing active tasks when subscribing to a project """
         res = super(Project, self).message_subscribe(partner_ids=partner_ids, channel_ids=channel_ids, subtype_ids=subtype_ids)
@@ -342,7 +338,6 @@ class Project(models.Model):
                 partner_ids=partner_ids, channel_ids=channel_ids, subtype_ids=task_subtypes)
         return res
 
-    @api.multi
     def message_unsubscribe(self, partner_ids=None, channel_ids=None):
         """ Unsubscribe from all tasks when unsubscribing from a project """
         self.mapped('tasks').message_unsubscribe(partner_ids=partner_ids, channel_ids=channel_ids)
@@ -352,7 +347,6 @@ class Project(models.Model):
     #  Actions
     # ---------------------------------------------------
 
-    @api.multi
     def toggle_favorite(self):
         favorite_projects = not_fav_projects = self.env['project.project'].sudo()
         for project in self:
@@ -365,7 +359,6 @@ class Project(models.Model):
         not_fav_projects.write({'favorite_user_ids': [(4, self.env.uid)]})
         favorite_projects.write({'favorite_user_ids': [(3, self.env.uid)]})
 
-    @api.multi
     def open_tasks(self):
         ctx = dict(self._context)
         ctx.update({'search_default_project_id': self.id})
@@ -379,7 +372,6 @@ class Project(models.Model):
         action['domain'] = [('account_id', '=', self.analytic_account_id.id)]
         return action
 
-    @api.multi
     def action_view_all_rating(self):
         """ return the action to see all the rating of the project, and activate default filters """
         if self.portal_show_rating:
@@ -411,7 +403,6 @@ class Project(models.Model):
         })
         return analytic_account
 
-    @api.multi
     def _create_analytic_account(self):
         for project in self:
             analytic_account = self.env['account.analytic.account'].create({
@@ -464,6 +455,12 @@ class Task(models.Model):
         return self.stage_find(project_id, [('fold', '=', False)])
 
     @api.model
+    def _default_company_id(self):
+        if self._context.get('default_project_id'):
+            return self.env['project.project'].browse(self._context['default_project_id']).company_id
+        return self.env.company
+
+    @api.model
     def _read_group_stage_ids(self, stages, domain, order):
         search_domain = [('id', 'in', stages.ids)]
         if 'default_project_id' in self.env.context:
@@ -484,7 +481,7 @@ class Task(models.Model):
     stage_id = fields.Many2one('project.task.type', string='Stage', ondelete='restrict', tracking=True, index=True,
         default=_get_default_stage_id, group_expand='_read_group_stage_ids',
         domain="[('project_ids', '=', project_id)]", copy=False)
-    tag_ids = fields.Many2many('project.tags', string='Tags', oldname='categ_ids')
+    tag_ids = fields.Many2many('project.tags', string='Tags')
     kanban_state = fields.Selection([
         ('normal', 'Grey'),
         ('done', 'Green'),
@@ -514,9 +511,11 @@ class Task(models.Model):
         index=True, tracking=True)
     partner_id = fields.Many2one('res.partner',
         string='Customer',
-        default=lambda self: self._get_default_partner())
+        default=lambda self: self._get_default_partner(),
+        domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]")
+    partner_city = fields.Char(related='partner_id.city', readonly=False)
     manager_id = fields.Many2one('res.users', string='Project Manager', related='project_id.user_id', readonly=True, related_sudo=False)
-    company_id = fields.Many2one('res.company', string='Company', required=True, default=lambda self: self.env.company)
+    company_id = fields.Many2one('res.company', string='Company', required=True, default=_default_company_id)
     color = fields.Integer(string='Color Index')
     user_email = fields.Char(related='user_id.email', string='User Email', readonly=True, related_sudo=False)
     attachment_ids = fields.One2many('ir.attachment', compute='_compute_attachment_ids', string="Main Attachments",
@@ -539,15 +538,17 @@ class Task(models.Model):
     # customer portal: include comment and incoming emails in communication history
     website_message_ids = fields.One2many(domain=lambda self: [('model', '=', self._name), ('message_type', 'in', ['email', 'comment'])])
 
-    _constraints = [(models.BaseModel._check_recursion, 'Circular references are not permitted between tasks and sub-tasks', ['parent_id'])]
+    @api.constrains('parent_id')
+    def _check_parent_id(self):
+        if not self._check_recursion():
+            raise ValidationError(_('You cannot create recursive tasks.'))
 
     def _compute_attachment_ids(self):
         for task in self:
             attachment_ids = self.env['ir.attachment'].search([('res_id', '=', task.id), ('res_model', '=', 'project.task')]).ids
             message_attachment_ids = task.mapped('message_ids.attachment_ids').ids  # from mail_thread
-            task.attachment_ids = list(set(attachment_ids) - set(message_attachment_ids))
+            task.attachment_ids = [(6, 0, list(set(attachment_ids) - set(message_attachment_ids)))]
 
-    @api.multi
     @api.depends('create_date', 'date_end', 'date_assign')
     def _compute_elapsed(self):
         task_linked_to_calendar = self.filtered(
@@ -558,15 +559,21 @@ class Task(models.Model):
 
             if task.date_assign:
                 dt_date_assign = fields.Datetime.from_string(task.date_assign)
-                task.working_hours_open = task.project_id.resource_calendar_id.get_work_hours_count(
-                        dt_create_date, dt_date_assign, compute_leaves=True)
-                task.working_days_open = task.working_hours_open / 24.0
+                duration_data = task.project_id.resource_calendar_id.get_work_duration_data(dt_create_date, dt_date_assign, compute_leaves=True)
+                task.working_hours_open = duration_data['hours']
+                task.working_days_open = duration_data['days']
+            else:
+                task.working_hours_open = 0.0
+                task.working_days_open = 0.0
 
             if task.date_end:
                 dt_date_end = fields.Datetime.from_string(task.date_end)
-                task.working_hours_close = task.project_id.resource_calendar_id.get_work_hours_count(
-                    dt_create_date, dt_date_end, compute_leaves=True)
-                task.working_days_close = task.working_hours_close / 24.0
+                duration_data = task.project_id.resource_calendar_id.get_work_duration_data(dt_create_date, dt_date_end, compute_leaves=True)
+                task.working_hours_close = duration_data['hours']
+                task.working_days_close = duration_data['days']
+            else:
+                task.working_hours_close = 0.0
+                task.working_days_close = 0.0
 
         (self - task_linked_to_calendar).update(dict.fromkeys(
             ['working_hours_open', 'working_hours_close', 'working_days_open', 'working_days_close'], 0.0))
@@ -622,6 +629,8 @@ class Task(models.Model):
                 self.partner_id = self.project_id.partner_id
             if self.project_id not in self.stage_id.project_ids:
                 self.stage_id = self.stage_find(self.project_id.id, [('fold', '=', False)])
+            # keep multi company consistency
+            self.company_id = self.project_id.company_id
         else:
             self.stage_id = False
 
@@ -631,7 +640,13 @@ class Task(models.Model):
             if task.parent_id and task.child_ids:
                 raise ValidationError(_('Task %s cannot have several subtask levels.' % (task.name,)))
 
-    @api.multi
+    @api.constrains('company_id', 'project_id')
+    def _check_multi_company(self):
+        for task in self:
+            if task.project_id:
+                if task.project_id.company_id != task.company_id:
+                    raise ValidationError(_('Your task must beo in the same company as its project.'))
+
     @api.returns('self', lambda value: value.id)
     def copy(self, default=None):
         if default is None:
@@ -711,7 +726,6 @@ class Task(models.Model):
         task = super(Task, self.with_context(context)).create(vals)
         return task
 
-    @api.multi
     def write(self, vals):
         now = fields.Datetime.now()
         # subtask: force some parent values, if needed
@@ -755,7 +769,6 @@ class Task(models.Model):
         """ Return the list of field name to apply on subtask when changing parent_id or when updating parent task. """
         return ['partner_id', 'email_from']
 
-    @api.multi
     def _subtask_write_values(self, values):
         """ Return the values to write on subtask when `values` is written on parent tasks
             :param values: dict of values to write on parent
@@ -778,7 +791,6 @@ class Task(models.Model):
     # Mail gateway
     # ---------------------------------------------------
 
-    @api.multi
     def _track_template(self, changes):
         res = super(Task, self)._track_template(changes)
         test_task = self[0]
@@ -790,11 +802,9 @@ class Task(models.Model):
             })
         return res
 
-    @api.multi
     def _creation_subtype(self):
         return self.env.ref('project.mt_task_new')
 
-    @api.multi
     def _track_subtype(self, init_values):
         self.ensure_one()
         if 'kanban_state_label' in init_values and self.kanban_state == 'blocked':
@@ -805,7 +815,6 @@ class Task(models.Model):
             return self.env.ref('project.mt_task_stage')
         return super(Task, self)._track_subtype(init_values)
 
-    @api.multi
     def _notify_get_groups(self):
         """ Handle project users and managers recipients that can assign
         tasks and create new one directly from notification emails. Also give
@@ -835,7 +844,6 @@ class Task(models.Model):
 
         return groups
 
-    @api.multi
     def _notify_get_reply_to(self, default=None, records=None, company=None, doc_names=None):
         """ Override to set alias of tasks to their project if any. """
         aliases = self.sudo().mapped('project_id')._notify_get_reply_to(default=default, records=None, company=company, doc_names=None)
@@ -845,7 +853,6 @@ class Task(models.Model):
             res.update(super(Task, leftover)._notify_get_reply_to(default=default, records=None, company=company, doc_names=doc_names))
         return res
 
-    @api.multi
     def email_split(self, msg):
         email_list = tools.email_split((msg.get('to') or '') + ',' + (msg.get('cc') or ''))
         # check left-part is not already an alias
@@ -880,7 +887,6 @@ class Task(models.Model):
         task.message_subscribe(partner_ids)
         return task
 
-    @api.multi
     def message_update(self, msg, update_vals=None):
         """ Override to update the task according to the email. """
         email_list = self.email_split(msg)
@@ -888,7 +894,6 @@ class Task(models.Model):
         self.message_subscribe(partner_ids)
         return super(Task, self).message_update(msg, update_vals=update_vals)
 
-    @api.multi
     def _message_get_suggested_recipients(self):
         recipients = super(Task, self)._message_get_suggested_recipients()
         for task in self:
@@ -899,7 +904,6 @@ class Task(models.Model):
                 task._message_add_suggested_recipient(recipients, email=task.email_from, reason=_('Customer Email'))
         return recipients
 
-    @api.multi
     def _notify_email_header_dict(self):
         headers = super(Task, self)._notify_email_header_dict()
         if self.project_id:
@@ -932,7 +936,8 @@ class Task(models.Model):
             'view_mode': 'form',
             'res_model': 'project.task',
             'res_id': self.parent_id.id,
-            'type': 'ir.actions.act_window'
+            'type': 'ir.actions.act_window',
+            'context': dict(self._context, create=False)
         }
 
     def action_subtask(self):
@@ -965,7 +970,6 @@ class Task(models.Model):
             return self.project_id.partner_id
         return res
 
-    @api.multi
     def rating_apply(self, rate, token=None, feedback=None, subtype=None):
         return super(Task, self).rating_apply(rate, token=token, feedback=feedback, subtype="project.mt_task_rating")
 
@@ -978,7 +982,7 @@ class ProjectTags(models.Model):
     _name = "project.tags"
     _description = "Project Tags"
 
-    name = fields.Char(required=True)
+    name = fields.Char('Tag Name', required=True)
     color = fields.Integer(string='Color Index')
 
     _sql_constraints = [

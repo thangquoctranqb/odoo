@@ -21,7 +21,7 @@ class StockQuant(models.Model):
     def _domain_location_id(self):
         if not self._is_inventory_mode():
             return
-        return ['&', ('company_id', '=', self.env.user.company_id.id), ('usage', 'in', ['internal', 'transit'])]
+        return ['&', ('company_id', '=', self.env.company.id), ('usage', 'in', ['internal', 'transit'])]
 
     def _domain_product_id(self):
         if not self._is_inventory_mode():
@@ -60,7 +60,7 @@ class StockQuant(models.Model):
     quantity = fields.Float(
         'Quantity',
         help='Quantity of products in this quant, in the default unit of measure of the product',
-        readonly=True, oldname='qty')
+        readonly=True)
     inventory_quantity = fields.Float(
         'Inventoried Quantity', compute='_compute_inventory_quantity',
         inverse='_set_inventory_quantity', groups='stock.group_stock_manager')
@@ -75,6 +75,7 @@ class StockQuant(models.Model):
     @api.depends('quantity')
     def _compute_inventory_quantity(self):
         if not self._is_inventory_mode():
+            self.inventory_quantity = 0
             return
         for quant in self:
             quant.inventory_quantity = quant.quantity
@@ -94,10 +95,10 @@ class StockQuant(models.Model):
             if diff_float_compared == 0:
                 continue
             elif diff_float_compared > 0:
-                move_vals = self._get_inventory_move_values(diff, self.product_id.property_stock_inventory, self.location_id)
+                move_vals = quant._get_inventory_move_values(diff, quant.product_id.property_stock_inventory, quant.location_id)
             else:
-                move_vals = self._get_inventory_move_values(-diff, self.location_id, self.product_id.property_stock_inventory, out=True)
-            move = self.env['stock.move'].with_context(inventory_mode=False).create(move_vals)
+                move_vals = quant._get_inventory_move_values(-diff, quant.location_id, quant.product_id.property_stock_inventory, out=True)
+            move = quant.env['stock.move'].with_context(inventory_mode=False).create(move_vals)
             move._action_done()
 
     @api.model
@@ -141,6 +142,9 @@ class StockQuant(models.Model):
     def write(self, vals):
         """ Override to handle the "inventory mode" and create the inventory move. """
         if self._is_inventory_mode() and 'inventory_quantity' in vals:
+            if any(quant.location_id.usage == 'inventory' for quant in self):
+                # Do nothing when user tries to modify manually a inventory loss
+                return
             allowed_fields = self._get_inventory_fields_write()
             if any([field for field in vals.keys() if field not in allowed_fields]):
                 raise UserError(_("Quant's edition is restricted, you can't do this operation."))
@@ -162,6 +166,31 @@ class StockQuant(models.Model):
                 ('result_package_id', '=', self.package_id.id),
         ]
         return action
+
+    @api.model
+    def action_view_quants(self):
+        self = self.with_context(search_default_internal_loc=1)
+        if self.user_has_groups('stock.group_production_lot,stock.group_stock_multi_locations'):
+            # fixme: erase the following condition when it'll be possible to create a new record
+            # from a empty grouped editable list without go through the form view.
+            if self.search_count([
+                ('company_id', '=', self.env.company.id),
+                ('location_id.usage', 'in', ['internal', 'transit'])
+            ]):
+                self = self.with_context(
+                    search_default_productgroup=1,
+                    search_default_locationgroup=1
+                )
+        if not self.user_has_groups('stock.group_stock_multi_locations'):
+            company_user = self.env.company
+            warehouse = self.env['stock.warehouse'].search([('company_id', '=', company_user.id)], limit=1)
+            if warehouse:
+                self = self.with_context(default_location_id=warehouse.lot_stock_id.id)
+
+        # If user have rights to write on quant, we set quants in inventory mode.
+        if self.user_has_groups('stock.group_stock_manager'):
+            self = self.with_context(inventory_mode=True)
+        return self._get_quants_action(extend=True)
 
     @api.constrains('product_id')
     def check_product_id(self):
@@ -204,6 +233,8 @@ class StockQuant(models.Model):
         raise UserError(_('Removal strategy %s not implemented.') % (removal_strategy,))
 
     def _gather(self, product_id, location_id, lot_id=None, package_id=None, owner_id=None, strict=False):
+        self.env['stock.quant'].flush(['location_id', 'owner_id', 'package_id', 'lot_id', 'product_id'])
+        self.env['product.product'].flush(['virtual_available'])
         removal_strategy = self._get_removal_strategy(product_id, location_id)
         removal_strategy_order = self._get_removal_strategy_order(removal_strategy)
         domain = [
@@ -224,7 +255,7 @@ class StockQuant(models.Model):
             domain = expression.AND([[('location_id', '=', location_id.id)], domain])
 
         # Copy code of _search for special NULLS FIRST/LAST order
-        self.with_user(self._uid).check_access_rights('read')
+        self.check_access_rights('read')
         query = self._where_calc(domain)
         self._apply_ir_rules(query, 'read')
         from_clause, where_clause, where_clause_params = query.get_sql()
@@ -301,6 +332,18 @@ class StockQuant(models.Model):
 
         if vals:
             self.update(vals)
+
+    @api.onchange('inventory_quantity')
+    def _onchange_inventory_quantity(self):
+        if self.location_id and self.location_id.usage == 'inventory':
+            warning = {
+                'title': _('You cannot modify inventory loss quantity'),
+                'message': _(
+                    'Editing quantities in an Inventory Adjustment location is forbidden,'
+                    'those locations are used as counterpart when correcting the quantities.'
+                )
+            }
+            return {'warning': warning}
 
     @api.model
     def _update_available_quantity(self, product_id, location_id, quantity, lot_id=None, package_id=None, owner_id=None, in_date=None):
@@ -418,7 +461,7 @@ class StockQuant(models.Model):
         this method is often called in batch and each unlink invalidate
         the cache. We defer the calls to unlink in this method.
         """
-        precision_digits = max(6, self.env.ref('product.decimal_product_uom').digits * 2)
+        precision_digits = max(6, self.sudo().env.ref('product.decimal_product_uom').digits * 2)
         # Use a select instead of ORM search for UoM robustness.
         query = """SELECT id FROM stock_quant WHERE round(quantity::numeric, %s) = 0 AND round(reserved_quantity::numeric, %s) = 0;"""
         params = (precision_digits, precision_digits)
@@ -498,7 +541,7 @@ class StockQuant(models.Model):
             'product_id': self.product_id.id,
             'product_uom': self.product_uom_id.id,
             'product_uom_qty': qty,
-            'company_id': self.company_id.id,
+            'company_id': self.company_id.id or self.env.user.company_id.id,
             'state': 'confirmed',
             'location_id': location_id.id,
             'location_dest_id': location_dest_id.id,
@@ -508,7 +551,7 @@ class StockQuant(models.Model):
                 'qty_done': qty,
                 'location_id': location_id.id,
                 'location_dest_id': location_dest_id.id,
-                'company_id': self.company_id.id,
+                'company_id': self.company_id.id or self.env.user.company_id.id,
                 'lot_id': self.lot_id.id,
                 'package_id': out and self.package_id.id or False,
                 'result_package_id': (not out) and self.package_id.id or False,
@@ -527,7 +570,7 @@ class StockQuant(models.Model):
         """
         self._quant_tasks()
         action = {
-            'name': _('Stock On Hand'),
+            'name': _('Update Quantity'),
             'view_type': 'tree',
             'view_mode': 'list',
             'res_model': 'stock.quant',
@@ -536,9 +579,8 @@ class StockQuant(models.Model):
             'domain': domain or [],
             'help': """
                 <p class="o_view_nocontent_empty_folder">No Stock On Hand</p>
-                <p>This analysis gives you an overview on the current stock
-                level of your products.<br/>
-                Click on create to update the quantity on hand</p>
+                <p>This analysis gives you an overview of the current stock
+                level of your products.</p>
                 """
         }
 

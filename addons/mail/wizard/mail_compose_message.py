@@ -8,6 +8,7 @@ import re
 
 from odoo import _, api, fields, models, SUPERUSER_ID, tools
 from odoo.tools.safe_eval import safe_eval
+from odoo.exceptions import UserError
 
 
 # main mako-like expression pattern
@@ -135,8 +136,7 @@ class MailComposer(models.TransientModel):
         ('notification', 'System notification')],
         'Type', required=True, default='comment',
         help="Message type: email for email message, notification for system "
-             "message, comment for other messages such as user replies",
-        oldname='type')
+             "message, comment for other messages such as user replies")
     subtype_id = fields.Many2one(
         'mail.message.subtype', 'Subtype', ondelete='set null', index=True,
         default=lambda self: self.env['ir.model.data'].xmlid_to_res_id('mail.mt_comment'))
@@ -184,8 +184,6 @@ class MailComposer(models.TransientModel):
             if not values.get('res_id'):
                 result['res_id'] = parent.res_id
             partner_ids = values.get('partner_ids', list()) + parent.partner_ids.ids
-            if self._context.get('is_private') and parent.author_id:  # check message is private then add author also in partner list.
-                partner_ids += [parent.author_id.id]
             result['partner_ids'] = partner_ids
         elif values.get('model') and values.get('res_id'):
             doc_name_get = self.env[values.get('model')].browse(values.get('res_id')).name_get()
@@ -204,13 +202,11 @@ class MailComposer(models.TransientModel):
     #------------------------------------------------------
     # action buttons call with positionnal arguments only, so we need an intermediary function
     # to ensure the context is passed correctly
-    @api.multi
     def action_send_mail(self):
         self.send_mail()
         return {'type': 'ir.actions.act_window_close', 'infos': 'mail_sent'}
 
 
-    @api.multi
     def send_mail(self, auto_commit=False):
         """ Process the wizard content and proceed with sending the related
             email(s), rendering any template patterns on the fly if needed. """
@@ -234,6 +230,7 @@ class MailComposer(models.TransientModel):
                         new_attachment_ids.append(attachment.copy({'res_model': 'mail.compose.message', 'res_id': wizard.id}).id)
                     else:
                         new_attachment_ids.append(attachment.id)
+                new_attachment_ids.reverse()
                 wizard.write({'attachment_ids': [(6, 0, new_attachment_ids)]})
 
             # Mass Mailing
@@ -282,14 +279,15 @@ class MailComposer(models.TransientModel):
                             if wizard.model:
                                 post_params['model'] = wizard.model
                                 post_params['res_id'] = res_id
-                            ActiveModel.message_notify(**post_params)
+                            if not ActiveModel.message_notify(**post_params):
+                                # if message_notify returns an empty record set, no recipients where found.
+                                raise UserError(_("No recipient found."))
                         else:
                             ActiveModel.browse(res_id).message_post(**post_params)
 
                 if wizard.composition_mode == 'mass_mail':
                     batch_mails.send(auto_commit=auto_commit)
 
-    @api.multi
     def get_mail_values(self, res_ids):
         """Generate the values that will be used by send_mail to create mail_messages
         or mail_mails. """
@@ -362,6 +360,7 @@ class MailComposer(models.TransientModel):
                 for attach_id in mail_values.pop('attachment_ids'):
                     new_attach_id = self.env['ir.attachment'].browse(attach_id).copy({'res_model': self._name, 'res_id': self.id})
                     attachment_ids.append(new_attach_id.id)
+                attachment_ids.reverse()
                 mail_values['attachment_ids'] = self.env['mail.thread']._message_post_process_attachments(
                     mail_values.pop('attachments', []),
                     attachment_ids,
@@ -380,7 +379,6 @@ class MailComposer(models.TransientModel):
     # Template methods
     #------------------------------------------------------
 
-    @api.multi
     @api.onchange('template_id')
     def onchange_template_id_wrapper(self):
         self.ensure_one()
@@ -388,7 +386,6 @@ class MailComposer(models.TransientModel):
         for fname, value in values.items():
             setattr(self, fname, value)
 
-    @api.multi
     def onchange_template_id(self, template_id, composition_mode, model, res_id):
         """ - mass_mailing: we cannot render, so return the template values
             - normal mode: return rendered values
@@ -421,7 +418,7 @@ class MailComposer(models.TransientModel):
                 }
                 attachment_ids.append(Attachment.create(data_attach).id)
             if values.get('attachment_ids', []) or attachment_ids:
-                values['attachment_ids'] = [(5,)] + values.get('attachment_ids', []) + attachment_ids
+                values['attachment_ids'] = [(6, 0, values.get('attachment_ids', []) + attachment_ids)]
         else:
             default_values = self.with_context(default_composition_mode=composition_mode, default_model=model, default_res_id=res_id).default_get(['composition_mode', 'model', 'res_id', 'parent_id', 'partner_ids', 'subject', 'body', 'email_from', 'reply_to', 'attachment_ids', 'mail_server_id'])
             values = dict((key, default_values[key]) for key in ['subject', 'body', 'partner_ids', 'email_from', 'reply_to', 'attachment_ids', 'mail_server_id'] if key in default_values)
@@ -434,7 +431,6 @@ class MailComposer(models.TransientModel):
 
         return {'value': values}
 
-    @api.multi
     def save_as_template(self):
         """ hit save as template button: current form value will be a new
             template attached to the current document. """
@@ -459,7 +455,6 @@ class MailComposer(models.TransientModel):
     # Template rendering
     #------------------------------------------------------
 
-    @api.multi
     def render_message(self, res_ids):
         """Generate template-based values of wizard, for the document records given
         by res_ids. This method is meant to be inherited by email_template that

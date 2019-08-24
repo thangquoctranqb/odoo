@@ -155,6 +155,10 @@ var BasicModel = AbstractModel.extend({
         // save is performed.
         this.mutex = new concurrency.Mutex();
 
+        // this array is used to accumulate RPC requests done in the same call
+        // stack, so that they can be batched in the minimum number of RPCs
+        this.batchedRPCsRequests = [];
+
         this.localData = Object.create(null);
         this._super.apply(this, arguments);
     },
@@ -776,7 +780,7 @@ var BasicModel = AbstractModel.extend({
         var defs = [];
         var record_fields = {};
         _.each(fields, function (field) {
-            record_fields[field.name] = _.pick(field, 'type', 'relation', 'domain');
+            record_fields[field.name] = _.pick(field, 'type', 'relation', 'domain', 'selection');
         });
         fieldInfo = fieldInfo || {};
         var fieldsInfo = {};
@@ -792,6 +796,7 @@ var BasicModel = AbstractModel.extend({
         });
         _.each(fields, function (field) {
             var dataPoint;
+            record.data[field.name] = null;
             if (field.type === 'many2one') {
                 if (field.value) {
                     var id = _.isArray(field.value) ? field.value[0] : field.value;
@@ -1176,7 +1181,7 @@ var BasicModel = AbstractModel.extend({
      * @param {string} parentID id of the parent resource to reload
      * @returns {Promise<string>} resolves to the parent id
      */
-    toggleActive: function (recordIDs, value, parentID) {
+    toggleActive: function (recordIDs, parentID) {
         var self = this;
         var parent = this.localData[parentID];
         var resIDs = _.map(recordIDs, function (recordID) {
@@ -1184,13 +1189,85 @@ var BasicModel = AbstractModel.extend({
         });
         return this._rpc({
                 model: parent.model,
-                method: 'write',
-                args: [resIDs, { active: value }],
+                method: 'toggle_active',
+                args: [resIDs],
             })
-            .then(function () {
+            .then(function (action) {
                 // optionally clear the DataManager's cache
                 self._invalidateCache(parent);
-                return self.reload(parentID);
+                if (!_.isEmpty(action)) {
+                    return self.do_action(action, {
+                        on_close: function () {
+                            return self.reload(parentID);
+                        }
+                    });
+                } else {
+                    return self.reload(parentID);
+                }
+            });
+    },
+    /**
+     * Archive the given records
+     *
+     * @param {Array} recordIDs local ids of the records to (un)archive
+     * @param {string} parentID id of the parent resource to reload
+     * @returns {Promise<string>} resolves to the parent id
+     */
+    actionArchive: function (recordIDs, parentID) {
+        var self = this;
+        var parent = this.localData[parentID];
+        var resIDs = _.map(recordIDs, function (recordID) {
+            return self.localData[recordID].res_id;
+        });
+        return this._rpc({
+                model: parent.model,
+                method: 'action_archive',
+                args: [resIDs],
+            })
+            .then(function (action) {
+                // optionally clear the DataManager's cache
+                self._invalidateCache(parent);
+                if (!_.isEmpty(action)) {
+                    return self.do_action(action, {
+                        on_close: function () {
+                            return self.reload(parentID);
+                        }
+                    });
+                } else {
+                    return self.reload(parentID);
+                }
+            });
+    },
+    /**
+     * Unarchive the given records
+     *
+     * @param {Array} recordIDs local ids of the records to (un)archive
+     * @param {string} parentID id of the parent resource to reload
+     * @returns {Promise<string>} resolves to the parent id
+     */
+    actionUnarchive: function (recordIDs, parentID) {
+        var self = this;
+        var parent = this.localData[parentID];
+        var resIDs = _.map(recordIDs, function (recordID) {
+            return self.localData[recordID].res_id;
+        });
+        return this._rpc({
+                model: parent.model,
+                method: 'action_unarchive',
+                args: [resIDs],
+            })
+            .then(function (action) {
+                // optionally clear the DataManager's cache
+                self._invalidateCache(parent);
+                if (!_.isEmpty(action)) {
+                    return self.do_action(action, {
+                        on_close: function () {
+                            return self.reload(parentID);
+                        }
+                    });
+                } else {
+                    return self.reload(parentID);
+                }
             });
     },
     /**
@@ -1357,9 +1434,9 @@ var BasicModel = AbstractModel.extend({
         // apply changes to local data
         for (var fieldName in changes) {
             field = record.fields[fieldName];
-            if (field.type === 'one2many' || field.type === 'many2many') {
+            if (field && (field.type === 'one2many' || field.type === 'many2many')) {
                 defs.push(this._applyX2ManyChange(record, fieldName, changes[fieldName], options));
-            } else if (field.type === 'many2one' || field.type === 'reference') {
+            } else if (field && (field.type === 'many2one' || field.type === 'reference')) {
                 defs.push(this._applyX2OneChange(record, fieldName, changes[fieldName]));
             } else {
                 record._changes[fieldName] = changes[fieldName];
@@ -1374,7 +1451,7 @@ var BasicModel = AbstractModel.extend({
             var onChangeFields = []; // the fields that have changed and that have an on_change
             for (var fieldName in changes) {
                 field = record.fields[fieldName];
-                if (field.onChange) {
+                if (field && field.onChange) {
                     var isX2Many = field.type === 'one2many' || field.type === 'many2many';
                     if (!isX2Many || (self._isX2ManyValid(record._changes[fieldName] || record.data[fieldName]))) {
                         onChangeFields.push(fieldName);
@@ -1397,12 +1474,6 @@ var BasicModel = AbstractModel.extend({
                     resolve(_.keys(changes));
                 }
             }).then(function (fieldNames) {
-                _.each(fieldNames, function (name) {
-                    if (record._changes && record._changes[name] === record.data[name]) {
-                        delete record._changes[name];
-                        record._isDirty = !_.isEmpty(record._changes);
-                    }
-                });
                 return self._fetchSpecialData(record).then(function (fieldNames2) {
                     // Return the names of the fields that changed (onchange or
                     // associated special data change)
@@ -3983,11 +4054,7 @@ var BasicModel = AbstractModel.extend({
                     return;
                 }
                 if (result.warning) {
-                    self.trigger_up('warning', {
-                        message: result.warning.message,
-                        title: result.warning.title,
-                        type: 'dialog',
-                    });
+                    self.trigger_up('warning', result.warning);
                     record._warning = true;
                 }
                 if (result.domain) {
@@ -3997,6 +4064,86 @@ var BasicModel = AbstractModel.extend({
                     return result;
                 });
             });
+    },
+    /**
+     * This function accumulates RPC requests done in the same call stack, and
+     * performs them in the next micro task tick so that similar requests can be
+     * batched in a single RPC.
+     *
+     * For now, only 'read' calls are supported.
+     *
+     * @private
+     * @param {Object} params
+     * @returns {Promise}
+     */
+    _performRPC: function (params) {
+        var self = this;
+
+        // save the RPC request
+        var request = _.extend({}, params);
+        var prom = new Promise(function (resolve, reject) {
+            request.resolve = resolve;
+            request.reject = reject;
+        });
+        this.batchedRPCsRequests.push(request);
+
+        // empty the pool of RPC requests in the next micro tick
+        Promise.resolve().then(function () {
+            if (!self.batchedRPCsRequests.length) {
+                // pool has already been processed
+                return;
+            }
+
+            // reset pool of RPC requests
+            var batchedRPCsRequests = self.batchedRPCsRequests;
+            self.batchedRPCsRequests = [];
+
+            // batch similar requests
+            var batches = {};
+            var key;
+            for (var i = 0; i < batchedRPCsRequests.length; i++) {
+                var request = batchedRPCsRequests[i];
+                key = request.model + ',' + JSON.stringify(request.context);
+                if (!batches[key]) {
+                    batches[key] = _.extend({}, request, {requests: [request]});
+                } else {
+                    batches[key].ids = _.uniq(batches[key].ids.concat(request.ids));
+                    batches[key].fieldNames = _.uniq(batches[key].fieldNames.concat(request.fieldNames));
+                    batches[key].requests.push(request);
+                }
+            }
+
+            // perform batched RPCs
+            function onSuccess(batch, results) {
+                for (var i = 0; i < batch.requests.length; i++) {
+                    var request = batch.requests[i];
+                    var fieldNames = request.fieldNames.concat(['id']);
+                    var filteredResults = results.filter(function (record) {
+                        return request.ids.indexOf(record.id) >= 0;
+                    }).map(function (record) {
+                        return _.pick(record, fieldNames);
+                    });
+                    request.resolve(filteredResults);
+                }
+            }
+            function onFailure(batch, error) {
+                for (var i = 0; i < batch.requests.length; i++) {
+                    var request = batch.requests[i];
+                    request.reject(error);
+                }
+            }
+            for (key in batches) {
+                var batch = batches[key];
+                self._rpc({
+                    model: batch.model,
+                    method: 'read',
+                    args: [batch.ids, batch.fieldNames],
+                    context: batch.context,
+                }).then(onSuccess.bind(null, batch)).guardedCatch(onFailure.bind(null, batch));
+            }
+        });
+
+        return prom;
     },
     /**
      * Once a record is created and some data has been fetched, we need to do
@@ -4205,11 +4352,12 @@ var BasicModel = AbstractModel.extend({
 
         var def;
         if (missingIDs.length && fieldNames.length) {
-            def = self._rpc({
-                model: list.model,
-                method: 'read',
-                args: [missingIDs, fieldNames],
+            def = self._performRPC({
                 context: list.getContext(),
+                fieldNames: fieldNames,
+                ids: missingIDs,
+                method: 'read',
+                model: list.model,
             });
         } else {
             def = Promise.resolve(_.map(missingIDs, function (id) {

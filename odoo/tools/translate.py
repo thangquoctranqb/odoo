@@ -2,6 +2,7 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 import codecs
 import fnmatch
+import functools
 import inspect
 import io
 import locale
@@ -352,6 +353,21 @@ def translate(cr, name, source_type, lang, source=None):
     res = res_trans and res_trans[0] or False
     return res
 
+def translate_sql_constraint(cr, key, lang):
+    cr.execute("""
+        SELECT COALESCE(t.value, c.message) as message
+        FROM ir_model_constraint c
+        LEFT JOIN
+        (SELECT res_id, value FROM ir_translation
+         WHERE type='model'
+           AND name='ir.model.constraint,message'
+           AND lang=%s
+           AND value!='') AS t
+        ON c.id=t.res_id
+        WHERE name=%s and type='u'
+        """, (lang, key))
+    return cr.fetchone()[0]
+
 class GettextAlias(object):
 
     def _get_db(self):
@@ -429,6 +445,9 @@ class GettextAlias(object):
         return lang
 
     def __call__(self, source):
+        return self._get_translation(source)
+
+    def _get_translation(self, source):
         res = source
         cr = None
         is_new_cr = False
@@ -439,13 +458,16 @@ class GettextAlias(object):
             frame = frame.f_back
             if not frame:
                 return source
+            frame = frame.f_back
+            if not frame:
+                return source
             lang = self._get_lang(frame)
             if lang:
                 cr, is_new_cr = self._get_cr(frame)
                 if cr:
                     # Try to use ir.translation to benefit from global cache if possible
                     env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
-                    res = env['ir.translation']._get_source(None, ('code','sql_constraint'), lang, source)
+                    res = env['ir.translation']._get_source(None, ('code',), lang, source)
                 else:
                     _logger.debug('no context cursor detected, skipping translation for "%r"', source)
             else:
@@ -457,6 +479,45 @@ class GettextAlias(object):
             if cr and is_new_cr:
                 cr.close()
         return res
+
+
+@functools.total_ordering
+class _lt:
+    """ Lazy code translation
+
+    Similar to GettextAlias but the translation lookup will be done only at
+    __str__ execution.
+
+    A code using translated global variables such as:
+
+    LABEL = _lt("User")
+
+    def _compute_label(self):
+        context = {'lang': self.partner_id.lang}
+        self.user_label = LABEL
+
+    works as expected (unlike the classic GettextAlias implementation).
+    """
+
+    __slots__ = ['_source']
+    def __init__(self, source):
+        self._source = source
+
+    def __str__(self):
+        # Call _._get_translation() like _() does, so that we have the same number
+        # of stack frames calling _get_translation()
+        return _._get_translation(self._source)
+
+    def __eq__(self, other):
+        """ Prevent using equal operators
+
+        Prevent direct comparisons with ``self``.
+        One should compare the translation of ``self._source`` as ``str(self) == X``.
+        """
+        raise NotImplementedError()
+
+    def __lt__(self, other):
+        raise NotImplementedError()
 
 _ = GettextAlias()
 
@@ -578,33 +639,13 @@ class PoFileReader:
 
                 match = re.match(r'(selection):([\w.]+),([\w]+)', occurrence)
                 if match:
-                    type, model_name, field_name = match.groups()
-                    yield {
-                        'type': type,
-                        'model': model_name,
-                        'name': model_name+','+field_name,
-                        'src': source,
-                        'value': translation,
-                        'comments': comments,
-                        'res_id': int(line_number),
-                        'module': module,
-                    }
+                    _logger.info("Skipped deprecated occurrence %s", occurrence)
                     continue
 
                 match = re.match(r'(sql_constraint|constraint):([\w.]+)', occurrence)
                 if match:
-                    type, model = match.groups()
-                    yield {
-                        'type': type,
-                        'name': model,
-                        'src': source,
-                        'value': translation,
-                        'comments': comments,
-                        'res_id': int(line_number),
-                        'module': module,
-                    }
+                    _logger.info("Skipped deprecated occurrence %s", occurrence)
                     continue
-
                 _logger.error("malformed po file: unknown occurrence: %s", occurrence)
 
 def TranslationFileWriter(target, fileformat='po', lang=None, modules=None):
@@ -697,6 +738,7 @@ class PoFileWriter:
         for typy, name, res_id in tnrs:
             if typy == 'code':
                 code = True
+                res_id = 0
             if isinstance(res_id, int) or res_id.isdigit():
                 # second term of occurrence must be a digit
                 # occurrence line at 0 are discarded when rendered to string
@@ -849,25 +891,18 @@ def trans_generate(lang, modules, cr):
         to_translate.add(tnx)
 
     query = 'SELECT min(name), model, res_id, module FROM ir_model_data'
-    query_models = """SELECT m.id, m.model, imd.module
-                      FROM ir_model AS m, ir_model_data AS imd
-                      WHERE m.id = imd.res_id AND imd.model = 'ir.model'"""
 
     if 'all_installed' in modules:
         query += ' WHERE module IN ( SELECT name FROM ir_module_module WHERE state = \'installed\') '
-        query_models += " AND imd.module in ( SELECT name FROM ir_module_module WHERE state = 'installed') "
 
     if 'all' not in modules:
         query += ' WHERE module IN %s'
-        query_models += ' AND imd.module IN %s'
         query_param = (tuple(modules),)
     else:
         query += ' WHERE module != %s'
-        query_models += ' AND imd.module != %s'
         query_param = ('__export__',)
 
     query += ' GROUP BY model, res_id, module ORDER BY module, model, min(name)'
-    query_models += ' ORDER BY module, model'
 
     cr.execute(query, query_param)
 
@@ -899,11 +934,6 @@ def trans_generate(lang, modules, cr):
                 continue
             field = field_model._fields[field_name]
 
-            if isinstance(getattr(field, 'selection', None), (list, tuple)):
-                name = "%s,%s" % (record.model, field_name)
-                for dummy, val in field.selection:
-                    push_translation(module, 'selection', name, 0, val)
-
         for field_name, field in record._fields.items():
             if field.translate:
                 name = model + "," + field_name
@@ -916,33 +946,6 @@ def trans_generate(lang, modules, cr):
                     push_translation(module, trans_type, name, xml_name, term)
 
         # End of data for ir.model.data query results
-
-    def push_constraint_msg(module, term_type, model, msg):
-        if not callable(msg):
-            push_translation(encode(module), term_type, encode(model), 0, msg)
-
-    def push_local_constraints(module, model, cons_type='sql_constraints'):
-        """ Climb up the class hierarchy and ignore inherited constraints from other modules. """
-        term_type = 'sql_constraint' if cons_type == 'sql_constraints' else 'constraint'
-        msg_pos = 2 if cons_type == 'sql_constraints' else 1
-        for cls in model.__class__.__mro__:
-            if getattr(cls, '_module', None) != module:
-                continue
-            constraints = getattr(cls, '_local_' + cons_type, [])
-            for constraint in constraints:
-                push_constraint_msg(module, term_type, model._name, constraint[msg_pos])
-            
-    cr.execute(query_models, query_param)
-
-    for (_, model, module) in cr.fetchall():
-        if model not in env:
-            _logger.error("Unable to find object %r", model)
-            continue
-        Model = env[model]
-        if Model._constraints:
-            push_local_constraints(module, Model, 'constraints')
-        if Model._sql_constraints:
-            push_local_constraints(module, Model, 'sql_constraints')
 
     installed_modules = [
         m['name']
@@ -1003,7 +1006,8 @@ def trans_generate(lang, modules, cr):
         _logger.debug("Scanning files of modules at %s", path)
         for root, dummy, files in walksymlinks(path):
             for fname in fnmatch.filter(files, '*.py'):
-                babel_extract_terms(fname, path, root)
+                babel_extract_terms(fname, path, root,
+                                    extract_keywords={'_': None, '_lt': None})
             # Javascript source files in the static/src/js directory, rest is ignored (libs)
             if fnmatch.fnmatch(root, '*/static/src/js*'):
                 for fname in fnmatch.filter(files, '*.js'):

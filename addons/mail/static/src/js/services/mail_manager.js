@@ -85,7 +85,7 @@ var MailManager =  AbstractService.extend({
     addMessage: function (data, options) {
         options = options || {};
         var message = this.getMessage(data.id);
-        var prom = Promise.resolve();
+        var prom;
         if (!message) {
             prom = this._addNewMessage(data, options);
         } else {
@@ -94,9 +94,8 @@ var MailManager =  AbstractService.extend({
                     additionalThreadIDs: data.channel_ids
                 });
             }
-            if (options.domain && options.domain !== []) {
-                this._addMessageToThreads(message, options);
-            }
+            this._addMessageToThreads(message, options);
+            prom = Promise.resolve(message);
         }
         return prom;
     },
@@ -1259,7 +1258,7 @@ var MailManager =  AbstractService.extend({
     },
     /**
      * Update the mailboxes with mail data fetched from server, namely 'Inbox',
-     * 'Starred', and 'Moderation Queue' if the user is a moderator of a channel
+     * 'Starred', 'History', and 'Moderation Queue' if the user is a moderator of a channel
      *
      * @private
      * @param {Object} data
@@ -1282,6 +1281,10 @@ var MailManager =  AbstractService.extend({
             id: 'starred',
             name: _t("Starred"),
             mailboxCounter: data.starred_counter || 0,
+        });
+        this._addMailbox({
+            id: 'history',
+            name: _t("History"),
         });
 
         if (data.is_moderator) {

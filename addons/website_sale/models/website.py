@@ -30,6 +30,8 @@ class Website(models.Model):
         default=_get_default_website_team)
     pricelist_ids = fields.One2many('product.pricelist', compute="_compute_pricelist_ids",
                                     string='Price list available for this Ecommerce/Website')
+    all_pricelist_ids = fields.One2many('product.pricelist', 'website_id', string='All pricelists',
+                                        help='Technical: Used to recompute pricelist_ids')
 
     def _default_recovery_mail_template(self):
         try:
@@ -43,6 +45,7 @@ class Website(models.Model):
     shop_ppg = fields.Integer(default=20, string="Number of products in the grid on the shop")
     shop_ppr = fields.Integer(default=4, string="Number of grid columns on the shop")
 
+    @api.depends('all_pricelist_ids')
     def _compute_pricelist_ids(self):
         Pricelist = self.env['product.pricelist']
         for website in self:
@@ -50,7 +53,7 @@ class Website(models.Model):
                 Pricelist._get_website_pricelists_domain(website.id)
             )
 
-    @api.multi
+    @api.depends_context('website_id')
     def _compute_pricelist_id(self):
         for website in self:
             if website._context.get('website_id') != website.id:
@@ -190,7 +193,6 @@ class Website(models.Model):
             _logger.error('Fail to find pricelist for partner "%s" (id %s)', partner.name, partner.id)
         return pl
 
-    @api.multi
     def sale_product_domain(self):
         return [("sale_ok", "=", True)] + self.get_current_website().website_domain()
 
@@ -202,7 +204,6 @@ class Website(models.Model):
             self.env['account.payment.term'].sudo().search([('company_id', '=', self.company_id.id)], limit=1)
         ).id
 
-    @api.multi
     def _prepare_sale_order_values(self, partner, pricelist):
         self.ensure_one()
         affiliate_id = request.session.get('affiliate_id')
@@ -229,7 +230,6 @@ class Website(models.Model):
 
         return values
 
-    @api.multi
     def sale_get_order(self, force_create=False, code=None, update_pricelist=False, force_pricelist=False):
         """ Return the current sales order after mofications specified by params.
         :param bool force_create: Create sales order if not already existing
@@ -335,7 +335,7 @@ class Website(models.Model):
             if code_pricelist:
                 pricelist_id = code_pricelist.id
                 update_pricelist = True
-        elif code is not None and sale_order.pricelist_id.code:
+        elif code is not None and sale_order.pricelist_id.code and code != sale_order.pricelist_id.code:
             # code is not None when user removes code and click on "Apply"
             pricelist_id = partner.property_product_pricelist.id
             update_pricelist = True

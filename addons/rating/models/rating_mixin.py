@@ -53,15 +53,12 @@ class RatingMixin(models.AbstractModel):
     rating_count = fields.Integer('Rating count', compute="_compute_rating_stats")
     rating_avg = fields.Float("Rating Average", compute='_compute_rating_stats')
 
-    @api.multi
     @api.depends('rating_ids.rating')
     def _compute_rating_last_value(self):
         for record in self:
             ratings = self.env['rating.rating'].search([('res_model', '=', self._name), ('res_id', '=', record.id)], limit=1)
-            if ratings:
-                record.rating_last_value = ratings.rating
+            record.rating_last_value = ratings and ratings.rating or 0
 
-    @api.multi
     @api.depends('rating_ids')
     def _compute_rating_stats(self):
         """ Compute avg and count in one query, as thoses fields will be used together most of the time. """
@@ -80,12 +77,9 @@ class RatingMixin(models.AbstractModel):
             for record in self:
                 if record._rec_name in values:  # set the res_name of ratings to be recomputed
                     res_name_field = self.env['rating.rating']._fields['res_name']
-                    record.rating_ids._recompute_todo(res_name_field)
+                    self.env.add_to_compute(res_name_field, record.rating_ids)
                 if record._rating_get_parent_field_name() in values:
                     record.rating_ids.write({'parent_res_id': record[record._rating_get_parent_field_name()].id})
-
-        if self.env.recompute and self._context.get('recompute', True):  # trigger the recomputation of all field marked as "to recompute"
-            self.recompute()
 
         return result
 
@@ -101,7 +95,6 @@ class RatingMixin(models.AbstractModel):
            Should return a Many2One"""
         return None
 
-    @api.multi
     def _rating_domain(self):
         """ Returns a normalized domain on rating.rating to select the records to
             include in count, avg, ... computation of current model.
@@ -135,7 +128,6 @@ class RatingMixin(models.AbstractModel):
             rating = ratings[0]
         return rating.access_token
 
-    @api.multi
     def rating_send_request(self, template, lang=False, subtype_id=False, force_send=True, composition_mode='comment', notif_layout=None):
         """ This method send rating request by email, using a template given
         in parameter.
@@ -164,7 +156,6 @@ class RatingMixin(models.AbstractModel):
                 subtype_id=subtype_id
             )
 
-    @api.multi
     def rating_apply(self, rate, token=None, feedback=None, subtype=None):
         """ Apply a rating given a token. If the current model inherits from
         mail.thread mixing, a message is posted on its chatter.
@@ -199,7 +190,6 @@ class RatingMixin(models.AbstractModel):
                     self.write({'kanban_state': 'blocked'})
         return rating
 
-    @api.multi
     def rating_get_repartition(self, add_stats=False, domain=None):
         """ get the repatition of rating grade for the given res_ids.
             :param add_stats : flag to add stat to the result
@@ -230,7 +220,6 @@ class RatingMixin(models.AbstractModel):
             return result
         return values
 
-    @api.multi
     def rating_get_grades(self, domain=None):
         """ get the repatition of rating grade for the given res_ids.
             :param domain : optional domain of the rating to include/exclude in grades computation
@@ -250,7 +239,6 @@ class RatingMixin(models.AbstractModel):
                 res['bad'] += data[key]
         return res
 
-    @api.multi
     def rating_get_stats(self, domain=None):
         """ get the statistics of the rating repatition
             :param domain : optional domain of the rating to include/exclude in statistic computation

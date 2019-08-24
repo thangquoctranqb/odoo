@@ -144,7 +144,7 @@ class IrMailServer(models.Model):
 
     name = fields.Char(string='Description', required=True, index=True)
     smtp_host = fields.Char(string='SMTP Server', required=True, help="Hostname or IP of SMTP server")
-    smtp_port = fields.Integer(string='SMTP Port', size=5, required=True, default=25, help="SMTP Port. Usually 465 for SSL, and 25 or 587 for other cases.")
+    smtp_port = fields.Integer(string='SMTP Port', required=True, default=25, help="SMTP Port. Usually 465 for SSL, and 25 or 587 for other cases.")
     smtp_user = fields.Char(string='Username', help="Optional username for SMTP authentication", groups='base.group_system')
     smtp_pass = fields.Char(string='Password', help="Optional password for SMTP authentication", groups='base.group_system')
     smtp_encryption = fields.Selection([('none', 'None'),
@@ -162,7 +162,6 @@ class IrMailServer(models.Model):
                                                                   "is used. Default priority is 10 (smaller number = higher priority)")
     active = fields.Boolean(default=True)
 
-    @api.multi
     def test_smtp_connection(self):
         for server in self:
             smtp = False
@@ -202,7 +201,12 @@ class IrMailServer(models.Model):
                 except Exception:
                     # ignored, just a consequence of the previous exception
                     pass
-        raise UserError(_("Connection Test Succeeded! Everything seems properly set up!"))
+
+        title = _("Connection Test Succeeded!")
+        message = _("Everything seems properly set up!")
+        self.env['bus.bus'].sendone(
+            (self._cr.dbname, 'res.partner', self.env.user.partner_id.id),
+            {'type': 'simple_notification', 'title': title, 'message': message, 'sticky': False, 'warning': False})
 
     def connect(self, host=None, port=None, user=None, password=None, encryption=None,
                 smtp_debug=False, mail_server_id=None):
@@ -279,6 +283,11 @@ class IrMailServer(models.Model):
             smtp_user = pycompat.to_text(ustr(smtp_user))
             smtp_password = pycompat.to_text(ustr(smtp_password))
             connection.login(smtp_user, smtp_password)
+
+        # Some methods of SMTP don't check whether EHLO/HELO was sent.
+        # Anyway, as it may have been sent by login(), all subsequent usages should consider this command as sent.
+        connection.ehlo_or_helo_if_needed()
+
         return connection
 
     def build_email(self, email_from, email_to, subject, body, email_cc=None, email_bcc=None, reply_to=False,

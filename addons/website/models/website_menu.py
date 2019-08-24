@@ -21,7 +21,7 @@ class Menu(models.Model):
     page_id = fields.Many2one('website.page', 'Related Page', ondelete='cascade')
     new_window = fields.Boolean('New Window')
     sequence = fields.Integer(default=_default_sequence)
-    website_id = fields.Many2one('website', 'Website')
+    website_id = fields.Many2one('website', 'Website', ondelete='cascade')
     parent_id = fields.Many2one('website.menu', 'Parent Menu', index=True, ondelete="cascade")
     child_id = fields.One2many('website.menu', 'parent_id', string='Child Menus')
     parent_path = fields.Char(index=True)
@@ -29,7 +29,6 @@ class Menu(models.Model):
     group_ids = fields.Many2many('res.groups', string='Visible Groups',
                                  help="User need to be at least in one of these groups to see the menu")
 
-    @api.multi
     def name_get(self):
         if not self._context.get('display_website') and not self.env.user.has_group('website.group_multi_website'):
             return super(Menu, self).name_get()
@@ -74,7 +73,6 @@ class Menu(models.Model):
                 res = super(Menu, self).create(vals)
         return res  # Only one record is returned but multiple could have been created
 
-    @api.multi
     def unlink(self):
         default_menu = self.env.ref('website.main_menu', raise_if_not_found=False)
         menus_to_remove = self
@@ -156,7 +154,12 @@ class Menu(models.Model):
                 if menu_id.page_id:
                     menu_id.page_id = None
             else:
-                page = self.env['website.page'].search(['|', ('url', '=', menu['url']), ('url', '=', '/' + menu['url'])], limit=1)
+                domain = self.env["website"].website_domain(website_id) + [
+                    "|",
+                    ("url", "=", menu["url"]),
+                    ("url", "=", "/" + menu["url"]),
+                ]
+                page = self.env["website.page"].search(domain, limit=1)
                 if page:
                     menu['page_id'] = page.id
                     menu['url'] = page.url

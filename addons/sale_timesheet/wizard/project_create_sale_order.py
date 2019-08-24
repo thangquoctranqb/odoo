@@ -27,7 +27,7 @@ class ProjectCreateSalesOrder(models.TransientModel):
         return result
 
     project_id = fields.Many2one('project.project', "Project", domain=[('sale_line_id', '=', False)], help="Project for which we are creating a sales order", required=True)
-    partner_id = fields.Many2one('res.partner', string="Customer", domain=[('customer', '=', True)], required=True, help="Customer of the sales order")
+    partner_id = fields.Many2one('res.partner', string="Customer", required=True, help="Customer of the sales order")
     product_id = fields.Many2one('product.product', domain=[('type', '=', 'service'), ('invoice_policy', '=', 'delivery'), ('service_type', '=', 'timesheet')], string="Service", help="Product of the sales order item. Must be a service invoiced based on timesheets on tasks.")
     price_unit = fields.Float("Unit Price", help="Unit price of the sales order item.")
     currency_id = fields.Many2one('res.currency', string="Currency", related='product_id.currency_id', readonly=False)
@@ -47,7 +47,6 @@ class ProjectCreateSalesOrder(models.TransientModel):
         else:
             self.price_unit = 0.0
 
-    @api.multi
     def action_create_sale_order(self):
         # if project linked to SO line or at least on tasks with SO line, then we consider project as billable.
         if self.project_id.sale_line_id:

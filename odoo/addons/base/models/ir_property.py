@@ -60,7 +60,6 @@ class Property(models.Model):
                             default='many2one',
                             index=True)
 
-    @api.multi
     def _update_values(self, values):
         if 'value' not in values:
             return values
@@ -98,7 +97,6 @@ class Property(models.Model):
         values[field] = value
         return values
 
-    @api.multi
     def write(self, values):
         # if any of the records we're writing on has a res_id=False *or*
         # we're writing a res_id=False on any record
@@ -112,6 +110,11 @@ class Property(models.Model):
             )
         r = super(Property, self).write(self._update_values(values))
         if default_set:
+            # DLE P44: test `test_27_company_dependent`
+            # Easy solution, need to flush write when changing a property.
+            # Maybe it would be better to be able to compute all impacted cache value and update those instead
+            # Then clear_caches must be removed as well.
+            self.flush()
             self.clear_caches()
         return r
 
@@ -121,10 +124,11 @@ class Property(models.Model):
         created_default = any(not v.get('res_id') for v in vals_list)
         r = super(Property, self).create(vals_list)
         if created_default:
+            # DLE P44: test `test_27_company_dependent`
+            self.flush()
             self.clear_caches()
         return r
 
-    @api.multi
     def unlink(self):
         default_deleted = False
         if self._ids:
@@ -138,7 +142,6 @@ class Property(models.Model):
             self.clear_caches()
         return r
 
-    @api.multi
     def get_by_record(self):
         self.ensure_one()
         if self.type in ('char', 'text', 'selection'):

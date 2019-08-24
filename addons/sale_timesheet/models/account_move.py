@@ -11,7 +11,6 @@ class AccountMove(models.Model):
     timesheet_ids = fields.One2many('account.analytic.line', 'timesheet_invoice_id', string='Timesheets', readonly=True, copy=False)
     timesheet_count = fields.Integer("Number of timesheets", compute='_compute_timesheet_count')
 
-    @api.multi
     @api.depends('timesheet_ids')
     def _compute_timesheet_count(self):
         timesheet_data = self.env['account.analytic.line'].read_group([('timesheet_invoice_id', 'in', self.ids)], ['timesheet_invoice_id'], ['timesheet_invoice_id'])
@@ -62,7 +61,7 @@ class AccountMoveLine(models.Model):
             sale_line_delivery = line.sale_line_ids.filtered(lambda sol: sol.product_id.invoice_policy == 'delivery' and sol.product_id.service_type == 'timesheet')
             if sale_line_delivery:
                 domain = self._timesheet_domain_get_invoiced_lines(sale_line_delivery)
-                timesheets = self.env['account.analytic.line'].search(domain)
+                timesheets = self.env['account.analytic.line'].search(domain).sudo()
                 timesheets.write({
                     'timesheet_invoice_id': line.move_id.id,
                 })

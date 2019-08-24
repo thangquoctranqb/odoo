@@ -1,11 +1,10 @@
 #!/usr/bin/python3
 import logging
 import time
-from threading import Thread, Event
+from threading import Thread, Event, Lock
 from usb import core
 from gatt import DeviceManager as Gatt_DeviceManager
 import subprocess
-import netifaces
 import json
 from re import sub
 import urllib3
@@ -19,44 +18,14 @@ from glob import glob
 from base64 import b64decode
 from pathlib import Path
 import socket
+import ctypes
 
 from odoo import http, _
 from odoo.modules.module import get_resource_path
+from odoo.addons.hw_drivers.tools import helpers
 
 _logger = logging.getLogger(__name__)
 
-
-#----------------------------------------------------------
-# Helper
-#----------------------------------------------------------
-
-def get_mac_address():
-    try:
-        return netifaces.ifaddresses('eth0')[netifaces.AF_LINK][0]['addr']
-    except:
-        return netifaces.ifaddresses('wlan0')[netifaces.AF_LINK][0]['addr']
-
-def get_ip():
-    try:
-        return netifaces.ifaddresses('eth0')[netifaces.AF_INET][0]['addr']
-    except:
-        return netifaces.ifaddresses('wlan0')[netifaces.AF_INET][0]['addr']
-
-def read_file_first_line(filename):
-    path = Path.home() / filename
-    if path.exists():
-        with path.open('r') as f:
-            return f.readline().strip('\n')
-    return ''
-
-def get_odoo_server_url():
-    return read_file_first_line('odoo-remote-server.conf')
-
-def get_token():
-    return read_file_first_line('token')
-
-def get_version():
-    return '19_04'
 
 #----------------------------------------------------------
 # Controllers
@@ -78,6 +47,14 @@ class StatusController(http.Controller):
             return True
         return False
 
+    @http.route('/hw_drivers/check_certificate', type='http', auth='none', cors='*', csrf=False, save_session=False)
+    def check_certificate(self):
+        """
+        This route is called when we want to check if certificate is up-to-date
+        Used in cron.daily
+        """
+        helpers.check_certificate()
+
     @http.route('/hw_drivers/event', type='json', auth='none', cors='*', csrf=False, save_session=False)
     def event(self, listener):
         """
@@ -97,13 +74,20 @@ class StatusController(http.Controller):
         1 - url of odoo DB
         2 - token. This token will be compared to the token of Odoo. He have 1 hour lifetime
         """
-        server = get_odoo_server_url()
+        server = helpers.get_odoo_server_url()
         image = get_resource_path('hw_drivers', 'static/img', 'False.jpg')
         if server == '':
-            token = b64decode(token).decode('utf-8')
-            url, token = token.split('|')
+            credential = b64decode(token).decode('utf-8').split('|')
+            url = credential[0]
+            token = credential[1]
+            if len(credential) > 2:
+                # IoT Box send token with db_uuid and enterprise_code only since V13
+                db_uuid = credential[2]
+                enterprise_code = credential[3]
+                helpers.add_credential(db_uuid, enterprise_code)
             try:
                 subprocess.check_call([get_resource_path('point_of_sale', 'tools/posbox/configuration/connect_to_server.sh'), url, '', token, 'noreboot'])
+                helpers.check_certificate()
                 m.send_alldevices()
                 image = get_resource_path('hw_drivers', 'static/img', 'True.jpg')
             except subprocess.CalledProcessError as e:
@@ -124,7 +108,11 @@ iot_devices = {}
 class DriverMetaClass(type):
     def __new__(cls, clsname, bases, attrs):
         newclass = super(DriverMetaClass, cls).__new__(cls, clsname, bases, attrs)
-        drivers.append(newclass)
+        # Some drivers must be tried only when all the others have been ruled out. These are kept at the bottom of the list.
+        if newclass.is_tested_last:
+            drivers.append(newclass)
+        else:
+            drivers.insert(0, newclass)
         return newclass
 
 class Driver(Thread, metaclass=DriverMetaClass):
@@ -132,6 +120,7 @@ class Driver(Thread, metaclass=DriverMetaClass):
     Hook to register the driver into the drivers list
     """
     connection_type = ""
+    is_tested_last = False
 
     def __init__(self, device):
         super(Driver, self).__init__()
@@ -145,14 +134,14 @@ class Driver(Thread, metaclass=DriverMetaClass):
 
     @property
     def device_identifier(self):
-        return self._device_identifier
+        return self.dev.identifier
 
     @property
     def device_connection(self):
         """
         On specific driver override this method to give connection type of device
         return string
-        possible value : direct - network - bluetooth
+        possible value : direct - network - bluetooth - serial
         """
         return self._device_connection
 
@@ -161,7 +150,7 @@ class Driver(Thread, metaclass=DriverMetaClass):
         """
         On specific driver override this method to give type of device
         return string
-        possible value : printer - camera - device
+        possible value : printer - camera - keyboard - scanner - device
         """
         return self._device_type
 
@@ -262,14 +251,19 @@ class Manager(Thread):
         """
         This method send IoT Box and devices informations to Odoo database
         """
-        server = get_odoo_server_url()
+        server = helpers.get_odoo_server_url()
         if server:
+            subject = helpers.read_file_first_line('odoo-subject.conf')
+            if subject:
+                domain = helpers.get_ip().replace('.', '-') + subject.strip('*')
+            else:
+                domain = helpers.get_ip()
             iot_box = {
                 'name': socket.gethostname(),
-                'identifier': get_mac_address(),
-                'ip': get_ip(),
-                'token': get_token(),
-                'version': get_version()
+                'identifier': helpers.get_mac_address(),
+                'ip': domain,
+                'token': helpers.get_token(),
+                'version': helpers.get_version()
                 }
             devices_list = {}
             for device in iot_devices:
@@ -301,13 +295,36 @@ class Manager(Thread):
         else:
             _logger.warning('Odoo server not set')
 
+    def serial_loop(self):
+        serial_devices = {}
+        for identifier in glob('/dev/serial/by-path/*'):
+            iot_device = IoTDevice({'identifier': identifier, }, 'serial')
+            serial_devices[identifier] = iot_device
+        return serial_devices
+
     def usb_loop(self):
+        """
+        Loops over the connected usb devices, assign them an identifier, instantiate
+        an `IoTDevice` for them.
+
+        USB devices are identified by a combination of their `idVendor` and
+        `idProduct`. We can't be sure this combination in unique per equipment.
+        To still allow connecting multiple similar equipments, we complete the
+        identifier by a counter. The drawbacks are we can't be sure the equipments
+        will get the same identifiers after a reboot or a disconnect/reconnect.
+
+        :return: a dict of the `IoTDevices` instances indexed by their identifier.
+        """
         usb_devices = {}
         devs = core.find(find_all=True)
+        cpt = 2
         for dev in devs:
-            path =  "usb_%04x:%04x_%03d_%03d_" % (dev.idVendor, dev.idProduct, dev.bus, dev.address)
+            dev.identifier =  "usb_%04x:%04x" % (dev.idVendor, dev.idProduct)
+            if dev.identifier in usb_devices:
+                dev.identifier += '_%s' % cpt
+                cpt += 1
             iot_device = IoTDevice(dev, 'usb')
-            usb_devices[path] = iot_device
+            usb_devices[dev.identifier] = iot_device
         return usb_devices
 
     def video_loop(self):
@@ -318,13 +335,15 @@ class Manager(Thread):
                 dev = v4l2.v4l2_capability()
                 ioctl(path, v4l2.VIDIOC_QUERYCAP, dev)
                 dev.interface = video
+                dev.identifier = dev.bus_info.decode('utf-8')
                 iot_device = IoTDevice(dev, 'video')
-                camera_devices[dev.bus_info.decode('utf-8')] = iot_device
+                camera_devices[dev.identifier] = iot_device
         return camera_devices
 
     def printer_loop(self):
         printer_devices = {}
-        devices = conn.getDevices()
+        with cups_lock:
+            devices = conn.getDevices()
         for path in [printer_lo for printer_lo in devices if devices[printer_lo]['device-make-and-model'] != 'Unknown']:
             if 'uuid=' in path:
                 serial = sub('[^a-zA-Z0-9 ]+', '', path.split('uuid=')[1])
@@ -342,6 +361,7 @@ class Manager(Thread):
         """
         Thread that will check connected/disconnected device, load drivers if needed and contact the odoo server with the updates
         """
+        helpers.check_certificate()
         devices = {}
         updated_devices = {}
         self.send_alldevices()
@@ -349,8 +369,10 @@ class Manager(Thread):
         while 1:
             updated_devices = self.usb_loop()
             updated_devices.update(self.video_loop())
+            updated_devices.update(mpdm.devices)
             updated_devices.update(bt_devices)
             updated_devices.update(socket_devices)
+            updated_devices.update(self.serial_loop())
             if cpt % 40 == 0:
                 printer_devices = self.printer_loop()
                 cpt = 0
@@ -384,6 +406,7 @@ class GattBtManager(Gatt_DeviceManager):
         path = "bt_%s" % (device.mac_address,)
         if path not in bt_devices:
             device.manager = self
+            device.identifier = path
             iot_device = IoTDevice(device, 'bluetooth')
             bt_devices[path] = iot_device
 
@@ -400,18 +423,57 @@ class SocketManager(Thread):
 
     def run(self):
         while True:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(('', 9000))
-            sock.listen(1)
-            dev, addr = sock.accept()
-            if addr and addr[0] not in socket_devices:
-                iot_device = IoTDevice(type('', (), {'dev': dev}), 'socket')
-                socket_devices[addr[0]] = iot_device
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(('', 9000))
+                sock.listen(1)
+                dev, addr = sock.accept()
+                if addr and addr[0] not in socket_devices:
+                    iot_device = IoTDevice(type('', (), {'dev': dev}), 'socket')
+                    socket_devices[addr[0]] = iot_device
+            except OSError as e:
+                _logger.error(_('Error in SocketManager: %s') % (e.strerror))
+
+class MPDManager(Thread):
+    def __init__(self):
+        super(MPDManager, self).__init__()
+        self.devices = {}
+        self.mpd_session = ctypes.c_void_p()
+
+    def run(self):
+        eftapi.EFT_CreateSession(ctypes.byref(self.mpd_session))
+        eftapi.EFT_PutDeviceId(self.mpd_session, terminal_id.encode())
+        while True:
+            if self.terminal_connected(terminal_id):
+                self.devices[terminal_id] = IoTDevice(terminal_id, 'mpd')
+            elif terminal_id in self.devices:
+                self.devices = {}
+            time.sleep(20)
+
+    def terminal_connected(self, terminal_id):
+        eftapi.EFT_QueryStatus(self.mpd_session)
+        eftapi.EFT_Complete(self.mpd_session, 1)  # Needed to read messages from driver
+        device_status = ctypes.c_long()
+        eftapi.EFT_GetDeviceStatusCode(self.mpd_session, ctypes.byref(device_status))
+        return device_status.value in [0, 1]
+
 
 conn = cups_connection()
 PPDs = conn.getPPDs()
 printers = conn.getPrinters()
+cups_lock = Lock()  # We can only make one call to Cups at a time
+
+mpdm = MPDManager()
+terminal_id = helpers.read_file_first_line('odoo-six-payment-terminal.conf')
+if terminal_id:
+    try:
+        subprocess.check_output(["pidof", "eftdvs"])  # Check if MPD server is running
+    except subprocess.CalledProcessError:
+        subprocess.Popen(["eftdvs", "/ConfigDir", "/usr/share/eftdvs/"])  # Start MPD server
+    eftapi = ctypes.CDLL("eftapi.so")  # Library given by Six
+    mpdm.daemon = True
+    mpdm.start()
 
 m = Manager()
 m.daemon = True

@@ -76,7 +76,10 @@ var ScreenWidget = PosBaseWidget.extend({
     barcode_client_action: function(code){
         var partner = this.pos.db.get_partner_by_barcode(code.code);
         if(partner){
-            this.pos.get_order().set_client(partner);
+            if (this.pos.get_order().get_client() !== partner) {
+                this.pos.get_order().set_client(partner);
+                this.pos.get_order().set_pricelist(_.findWhere(this.pos.pricelists, {'id': partner.property_product_pricelist[0]}) || this.pos.default_pricelist);
+            }
             return true;
         }
         this.barcode_error_action(code);
@@ -289,7 +292,6 @@ var ScaleScreenWidget = ScreenWidget.extend({
     show: function(){
         this._super();
         var self = this;
-        var queue = this.pos.proxy_queue;
 
         this.set_weight(0);
         this.renderElement();
@@ -314,7 +316,12 @@ var ScaleScreenWidget = ScreenWidget.extend({
             // add product *after* switching screen to scroll properly
             self.order_product();
         });
+        this._read_scale();
+    },
 
+    _read_scale: function() {
+        var self = this;
+        var queue = this.pos.proxy_queue;
         queue.schedule(function(){
             return self.pos.proxy.scale_read().then(function(weight){
                 self.set_weight(weight.weight);
@@ -728,7 +735,7 @@ var ProductCategoriesWidget = PosBaseWidget.extend({
     },
 
     get_image_url: function(category){
-        return window.location.origin + '/web/image?model=pos.category&field=image_medium&id='+category.id;
+        return window.location.origin + '/web/image?model=pos.category&field=image_128&id='+category.id;
     },
 
     render_category: function( category, with_image ){
@@ -807,7 +814,7 @@ var ProductCategoriesWidget = PosBaseWidget.extend({
 
         this.el.querySelector('.searchbox input').addEventListener('keydown',this.search_handler);
 
-        this.el.querySelector('.search-clear').addEventListener('click',this.clear_search_handler);
+        this.el.querySelector('.search-clear.right').addEventListener('click',this.clear_search_handler);
 
         if(this.pos.config.iface_vkeyboard && this.chrome.widget.keyboard){
             this.chrome.widget.keyboard.connect($(this.el.querySelector('.searchbox input')));
@@ -836,11 +843,11 @@ var ProductCategoriesWidget = PosBaseWidget.extend({
                     this.pos.get_order().add_product(products[0]);
                     this.clear_search();
             }else{
-                this.product_list_widget.set_product_list(products);
+                this.product_list_widget.set_product_list(products, query);
             }
         }else{
             products = this.pos.db.get_product_by_category(this.category.id);
-            this.product_list_widget.set_product_list(products);
+            this.product_list_widget.set_product_list(products, query);
         }
     },
 
@@ -863,6 +870,7 @@ var ProductListWidget = PosBaseWidget.extend({
         this.weight = options.weight || 0;
         this.show_scale = options.show_scale || false;
         this.next_screen = options.next_screen || false;
+        this.search_word = false;
 
         this.click_product_handler = function(){
             var product = self.pos.db.get_product_by_id(this.dataset.productId);
@@ -890,12 +898,13 @@ var ProductListWidget = PosBaseWidget.extend({
             this.renderElement();
         }, this);
     },
-    set_product_list: function(product_list){
+    set_product_list: function(product_list, search_word){
         this.product_list = product_list;
+        this.search_word = !!search_word ? search_word : false;
         this.renderElement();
     },
     get_product_image_url: function(product){
-        return window.location.origin + '/web/image?model=product.product&field=image_medium&id='+product.id;
+        return window.location.origin + '/web/image?model=product.product&field=image_128&id='+product.id;
     },
     replace: function($target){
         this.renderElement();
@@ -1248,10 +1257,11 @@ var ClientListScreenWidget = ScreenWidget.extend({
         if( this.has_client_changed() ){
             var default_fiscal_position_id = _.findWhere(this.pos.fiscal_positions, {'id': this.pos.config.default_fiscal_position_id[0]});
             if ( this.new_client ) {
+                var client_fiscal_position_id;
                 if (this.new_client.property_account_position_id ){
-                  var client_fiscal_position_id = _.findWhere(this.pos.fiscal_positions, {'id': this.new_client.property_account_position_id[0]});
-                  order.fiscal_position = client_fiscal_position_id || default_fiscal_position_id;
+                    client_fiscal_position_id = _.findWhere(this.pos.fiscal_positions, {'id': this.new_client.property_account_position_id[0]});
                 }
+                order.fiscal_position = client_fiscal_position_id || default_fiscal_position_id;
                 order.set_pricelist(_.findWhere(this.pos.pricelists, {'id': this.new_client.property_product_pricelist[0]}) || this.pos.default_pricelist);
             } else {
                 order.fiscal_position = default_fiscal_position_id;
@@ -1303,7 +1313,7 @@ var ClientListScreenWidget = ScreenWidget.extend({
         }
     },
     partner_icon_url: function(id){
-        return '/web/image?model=res.partner&id='+id+'&field=image_small';
+        return '/web/image?model=res.partner&id='+id+'&field=image_64';
     },
 
     // ui handle for the 'edit selected customer' action
@@ -1624,7 +1634,7 @@ var ReceiptScreenWidget = ScreenWidget.extend({
     should_close_immediately: function() {
         var order = this.pos.get_order();
         var invoiced_finalized = order.is_to_invoice() ? order.finalized : true;
-        return this.pos.config.iface_print_via_proxy && this.pos.config.iface_print_skip_screen && invoiced_finalized;
+        return this.pos.proxy.printer && this.pos.config.iface_print_skip_screen && invoiced_finalized;
     },
     lock_screen: function(locked) {
         this._locked = locked;
@@ -1664,16 +1674,16 @@ var ReceiptScreenWidget = ScreenWidget.extend({
         }
         this.pos.get_order()._printed = true;
     },
-    print_xml: function() {
-        var receipt = QWeb.render('XmlReceipt', this.get_receipt_render_env());
+    print_html: function () {
+        var receipt = QWeb.render('OrderReceipt', this.get_receipt_render_env());
 
-        this.pos.proxy.print_receipt(receipt);
+        this.pos.proxy.printer.print_receipt(receipt);
         this.pos.get_order()._printed = true;
     },
     print: function() {
         var self = this;
 
-        if (!this.pos.config.iface_print_via_proxy) { // browser (html) printing
+        if (!this.pos.proxy.printer) { // browser (html) printing
 
             // The problem is that in chrome the print() is asynchronous and doesn't
             // execute until all rpc are finished. So it conflicts with the rpc used
@@ -1698,8 +1708,8 @@ var ReceiptScreenWidget = ScreenWidget.extend({
             }, 1000);
 
             this.print_web();
-        } else {    // proxy (xml) printing
-            this.print_xml();
+        } else {    // proxy (html) printing
+            this.print_html();
             this.lock_screen(false);
         }
     },
@@ -1756,7 +1766,7 @@ var ReceiptScreenWidget = ScreenWidget.extend({
         }
     },
     render_receipt: function() {
-        this.$('.pos-receipt-container').html(QWeb.render('PosTicket', this.get_receipt_render_env()));
+        this.$('.pos-receipt-container').html(QWeb.render('OrderReceipt', this.get_receipt_render_env()));
     },
 });
 gui.define_screen({name:'receipt', widget: ReceiptScreenWidget});
@@ -1896,7 +1906,7 @@ var PaymentScreenWidget = ScreenWidget.extend({
 	}
 
 	if (! open_paymentline) {
-            this.pos.get_order().add_paymentline( this.pos.cashregisters[0]);
+            this.pos.get_order().add_paymentline( this.pos.payment_methods[0]);
             this.render_paymentlines();
         }
 
@@ -1940,12 +1950,7 @@ var PaymentScreenWidget = ScreenWidget.extend({
         }
 
         var lines = order.get_paymentlines();
-        var due   = order.get_due();
-        var extradue = 0;
-        if (due && lines.length  && due !== order.get_due(lines[lines.length-1])) {
-            extradue = due;
-        }
-
+        var extradue = this.compute_extradue(order);
 
         this.$('.paymentlines-container').empty();
         var lines = $(QWeb.render('PaymentScreen-Paymentlines', { 
@@ -1965,15 +1970,17 @@ var PaymentScreenWidget = ScreenWidget.extend({
             
         lines.appendTo(this.$('.paymentlines-container'));
     },
-    click_paymentmethods: function(id) {
-        var cashregister = null;
-        for ( var i = 0; i < this.pos.cashregisters.length; i++ ) {
-            if ( this.pos.cashregisters[i].journal_id[0] === id ){
-                cashregister = this.pos.cashregisters[i];
-                break;
-            }
+    compute_extradue: function (order) {
+        var lines = order.get_paymentlines();
+        var due   = order.get_due();
+        if (due && lines.length  && due !== order.get_due(lines[lines.length-1])) {
+            return due;
         }
-        this.pos.get_order().add_paymentline( cashregister );
+        return 0;
+    },
+    click_paymentmethods: function(id) {
+        var payment_method = this.pos.payment_methods_by_id[id]
+        this.pos.get_order().add_paymentline(payment_method);
         this.reset_input();
         this.render_paymentlines();
     },
@@ -2057,7 +2064,7 @@ var PaymentScreenWidget = ScreenWidget.extend({
         });
 
         this.$('.js_cashdrawer').click(function(){
-            self.pos.proxy.open_cashbox();
+            self.pos.proxy.printer.open_cashbox();
         });
 
     },
@@ -2127,8 +2134,8 @@ var PaymentScreenWidget = ScreenWidget.extend({
         // The exact amount must be paid if there is no cash payment method defined.
         if (Math.abs(order.get_total_with_tax() - order.get_total_paid()) > 0.00001) {
             var cash = false;
-            for (var i = 0; i < this.pos.cashregisters.length; i++) {
-                cash = cash || (this.pos.cashregisters[i].journal.type === 'cash');
+            for (var i = 0; i < this.pos.payment_methods.length; i++) {
+                cash = cash || (this.pos.payment_methods[i].is_cash_count);
             }
             if (!cash) {
                 this.gui.show_popup('error',{
@@ -2168,7 +2175,7 @@ var PaymentScreenWidget = ScreenWidget.extend({
 
         if (order.is_paid_with_cash() && this.pos.config.iface_cashdrawer) { 
 
-                this.pos.proxy.open_cashbox();
+                this.pos.proxy.printer.open_cashbox();
         }
 
         order.initialize_validation_date();

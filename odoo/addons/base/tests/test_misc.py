@@ -4,14 +4,12 @@
 import datetime
 from dateutil.relativedelta import relativedelta
 import pytz
-import unittest
 
-from odoo.tools import misc, date_utils
-from odoo.tests.common import TransactionCase, tagged
+from odoo.tools import misc, date_utils, merge_sequences
+from odoo.tests.common import TransactionCase, BaseCase
 
 
-@tagged('standard', 'at_install')
-class TestCountingStream(unittest.TestCase):
+class TestCountingStream(BaseCase):
     def test_empty_stream(self):
         s = misc.CountingStream(iter([]))
         self.assertEqual(s.index, -1)
@@ -42,8 +40,35 @@ class TestCountingStream(unittest.TestCase):
         self.assertEqual(s.index, 0)
 
 
-@tagged('standard', 'at_install')
-class TestDateRangeFunction(unittest.TestCase):
+class TestMergeSequences(BaseCase):
+    def test_merge_sequences(self):
+        # base case
+        seq = merge_sequences(['A', 'B', 'C'])
+        self.assertEqual(seq, ['A', 'B', 'C'])
+
+        # 'Z' can be anywhere
+        seq = merge_sequences(['A', 'B', 'C'], ['Z'])
+        self.assertEqual(seq, ['A', 'B', 'C', 'Z'])
+
+        # 'Y' must precede 'C';
+        seq = merge_sequences(['A', 'B', 'C'], ['Y', 'C'])
+        self.assertEqual(seq, ['A', 'B', 'Y', 'C'])
+
+        # 'X' must follow 'A' and precede 'C'
+        seq = merge_sequences(['A', 'B', 'C'], ['A', 'X', 'C'])
+        self.assertEqual(seq, ['A', 'B', 'X', 'C'])
+
+        # all cases combined
+        seq = merge_sequences(
+            ['A', 'B', 'C'],
+            ['Z'],                  # 'Z' can be anywhere
+            ['Y', 'C'],             # 'Y' must precede 'C';
+            ['A', 'X', 'Y'],        # 'X' must follow 'A' and precede 'Y'
+        )
+        self.assertEqual(seq, ['A', 'B', 'X', 'Y', 'C', 'Z'])
+
+
+class TestDateRangeFunction(BaseCase):
     """ Test on date_range generator. """
 
     def test_date_range_with_naive_datetimes(self):

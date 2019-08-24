@@ -150,7 +150,7 @@
                     <field name="oee_target"/>
                     <templates>
                         <t t-name="kanban-box">
-                            <div style="width: 400px;" t-attf-class="#{kanban_color(record.color.raw_value)}">
+                            <div t-attf-class="#{!selection_mode ? kanban_color(record.color.raw_value) : ''}">
                                 <div t-attf-class="o_kanban_card_header o_kanban_record_top">
                                     <div class="o_kanban_record_headings o_kanban_card_header_title">
                                         <span class="o_primary ml8" style="display: inline-block">
@@ -299,14 +299,14 @@
                             </button>
                             <button name="%(mrp_workcenter_productivity_report_blocked)d" type="action" class="oe_stat_button" icon="fa-bar-chart">
                                 <div class="o_field_widget o_stat_info">
-                                    <span class="o_stat_value"><field name="blocked_time" widget="statinfo" nolabel="1"/> hour(s)</span>
+                                    <span class="o_stat_value"><field name="blocked_time" widget="statinfo" nolabel="1"/> Hours</span>
                                     <span class="o_stat_text">Lost</span>
                                 </div>
                             </button>
                             <button name="%(action_mrp_workcenter_load_report_graph)d" type="action" class="oe_stat_button" icon="fa-bar-chart" context="{'search_default_workcenter_id': active_id}">
                                 <div class="o_field_widget o_stat_info">
-                                    <span class="o_stat_value"><field name="workcenter_load" widget="statinfo" nolabel="1"/> minute(s)</span>
-                                    <span class="o_stat_text">Work Center Load</span>
+                                    <span class="o_stat_value"><field name="workcenter_load" widget="statinfo" nolabel="1"/> Minutes</span>
+                                    <span class="o_stat_text">Load</span>
                                 </div>
                             </button>
                             <button name="%(mrp_workorder_report)d" type="action" class="oe_stat_button" icon="fa-bar-chart" context="{'search_default_workcenter_id': active_id, 'search_default_thisyear': True}">
@@ -315,13 +315,11 @@
                                     <span class="o_stat_text">Performance</span>
                                 </div>
                             </button>
-                            <button class="oe_stat_button" name="toggle_active" type="object" icon="fa-archive">
-                                <field name="active" widget="boolean_button"
-                                    options='{"terminology": "archive"}'/>
-                            </button>
                         </div>
+                        <widget name="web_ribbon" text="Archived" bg_color="bg-danger" attrs="{'invisible': [('active', '=', True)]}"/>
                         <group>
                             <group>
+                                <field name="active" invisible="1"/>
                                 <field name="name" string="Work Center Name" required="True"/>
                                 <field
                                     name="alternative_workcenter_ids"
@@ -378,10 +376,10 @@
             <field name="model">mrp.workcenter</field>
             <field name="arch" type="xml">
                 <search string="Search for mrp workcenter">
-                    <field name="name" string="Mrp Workcenter" filter_domain="['|',('name','ilike',self),('code','ilike',self)]"/>
-                    <filter string="Archived" name="archived" domain="[('active','=',False)]"/>
+                    <field name="name" string="Work Center" filter_domain="['|', ('name', 'ilike', self), ('code', 'ilike', self)]"/>
+                    <filter name="archived" string="Archived" domain="[('active', '=', False)]"/>
                     <group expand="0" string="Group By...">
-                        <filter string="Company" name="company" domain="[]" context="{'group_by':'company_id'}" groups="base.group_multi_company"/>
+                        <filter string="Company" name="company" domain="[]" context="{'group_by': 'company_id'}" groups="base.group_multi_company"/>
                     </group>
                 </search>
             </field>
@@ -460,9 +458,9 @@
         <field name="name">mrp.workcenter.productivity.loss.tree</field>
         <field name="model">mrp.workcenter.productivity.loss</field>
         <field name="arch" type="xml">
-            <tree string="Workcenter Productivity Loss">
+            <tree string="Workcenter Productivity Loss" editable='bottom'>
                 <field name="sequence" widget="handle"/>
-                <field name="name" string="Blocking Reasons"/>
+                <field name="name"/>
                 <field name="loss_type" string="Category"/>
             </tree>
         </field>

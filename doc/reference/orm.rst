@@ -565,16 +565,6 @@ Two decorators can expose a new-style method to the old API:
         # can be called as
         old_style_model.some_method(cr, uid, a_value, context=context)
 
-:func:`~odoo.api.multi`
-    the method is exposed as taking a list of ids (possibly empty), its
-    "old API" signature is ``cr, uid, ids, *arguments, context``::
-
-        @api.multi
-        def some_method(self, a_value):
-            pass
-        # can be called as
-        old_style_model.some_method(cr, uid, [id1, id2], a_value, context=context)
-
 Note that a method `create` decorated with :func:`~odoo.api.model` will always
 be called with a single dictionary. A method `create` decorated with the variant
 :func:`~odoo.api.model_create_multi` will always be called with a list of dicts.
@@ -598,8 +588,7 @@ return lists of ids, there is also a decorator managing this:
     No effect if the method is called in new API style, but transforms the
     recordset into a list of ids when called from the old API style::
 
-        >>> @api.multi
-        ... @api.returns('self')
+        >>> @api.returns('self')
         ... def some_method(self):
         ...     return self
         >>> new_style_model = env['a.model'].browse(1, 2, 3)
@@ -844,8 +833,7 @@ Method decorators
 =================
 
 .. automodule:: odoo.api
-    :members: multi, model, depends, constrains, onchange, returns,
-              one, v7, v8
+    :members: model, depends, constrains, onchange, returns,
 
 .. _reference/orm/fields:
 
@@ -1176,9 +1164,9 @@ Porting from the old API to the new API
 * **remove** all ``onchange`` methods on computed fields. Computed fields are
   automatically re-computed when one of their dependencies is changed, and
   that is used to auto-generate ``onchange`` by the client
-* the decorators :func:`~odoo.api.model` and :func:`~odoo.api.multi` are
+* the decorator :func:`~odoo.api.model` is
   for bridging *when calling from the old API context*, for internal or pure
-  new-api (e.g. compute) they are useless
+  new-api (e.g. compute) it is useless
 * remove :attr:`~odoo.models.Model._default`, replace by ``default=``
   parameter on corresponding fields
 * if a field's ``string=`` is the titlecased version of the field name::
@@ -1197,8 +1185,6 @@ Porting from the old API to the new API
 * the normal new-api import is ``from odoo import fields, models``. If
   compatibility decorators are necessary, use ``from odoo import api,
   fields, models``
-* avoid the :func:`~odoo.api.one` decorator, it probably does not do what
-  you expect
 * remove explicit definition of :attr:`~odoo.models.Model.create_uid`,
   :attr:`~odoo.models.Model.create_date`,
   :attr:`~odoo.models.Model.write_uid` and
@@ -1256,10 +1242,3 @@ automatically fill matched parameters from the current
 :attr:`~odoo.api.Environment.user` and
 :attr:`~odoo.api.Environment.context`) or the current recordset (for ``id``
 and ``ids``).
-
-In the rare cases where it is necessary, the bridging can be customized by
-decorating the old-style method:
-
-* disabling it entirely, by decorating a method with
-  :func:`~odoo.api.noguess` there will be no bridging and methods will be
-  called the exact same way from the new and old API styles

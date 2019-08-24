@@ -80,6 +80,8 @@ class MrpUnbuild(models.Model):
         if self.product_id:
             self.bom_id = self.env['mrp.bom']._bom_find(product=self.product_id)
             self.product_uom_id = self.product_id.uom_id.id
+            return {'domain': {'mo_id': [('state', '=', 'done'), ('product_id', '=', self.product_id.id)]}}
+        return {'domain': {'mo_id': [('state', '=', 'done')]}}
 
     @api.constrains('product_qty')
     def _check_qty(self):
@@ -92,13 +94,11 @@ class MrpUnbuild(models.Model):
             vals['name'] = self.env['ir.sequence'].next_by_code('mrp.unbuild') or _('New')
         return super(MrpUnbuild, self).create(vals)
 
-    @api.multi
     def unlink(self):
         if 'done' in self.mapped('state'):
             raise UserError(_("You cannot delete an unbuild order if the state is 'Done'."))
         return super(MrpUnbuild, self).unlink()
 
-    @api.multi
     def action_unbuild(self):
         self.ensure_one()
         if self.product_id.tracking != 'none' and not self.lot_id.id:

@@ -29,7 +29,8 @@
                 t-att-data-access-token="access_token or ''"
                 t-att-data-partner-id="partner_id"
                 t-att-data-callback-method="callback_method or ''"
-                t-att-data-order-id="order_id or ''">
+                t-att-data-order-id="order_id or ''"
+                t-att-data-mode="mode">
             <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
             <input type="hidden" t-if="prepare_tx_url" name="prepare_tx_url" t-att-value="prepare_tx_url"/>
             <input type="hidden" t-if="order_id" name="order_id" t-att-value="order_id"/>
@@ -62,7 +63,12 @@
                                        t-att-class="'d-none' if (acquirers_count==1 and pms_count==0) else ''"
                                        t-att-checked="acquirers_count==1 and pms_count==0 or acquirers[0] == acq"/>
                             </t>
-                            <span class="payment_option_name" t-esc="acq.name"/>
+                            <span class="payment_option_name">
+                              <t t-esc="acq.display_as or acq.name"/>
+                              <div t-if="acq.state == 'test'" class="badge-pill badge-warning float-right">
+                                Test Mode
+                              </div>
+                            </span>
                             <t t-if="acq_extra_fees and acq_extra_fees.get(acq)">
                                 <span class="badge badge-pill badge-secondary"> + <t t-esc="acq_extra_fees[acq]" t-options='{"widget": "monetary", "display_currency": acq_extra_fees["currency_id"]}'/> Fee </span>
                             </t>
@@ -85,6 +91,7 @@
                                 <t t-set="i" t-value="i+1"/>
                             </t>
                         </ul>
+                        <div t-raw="acq.pre_msg" class="text-muted ml-3"/>
                     </div>
                     <t t-if="acq.payment_flow == 'form'">
                         <div t-attf-id="o_payment_form_acq_{{acq.id}}"
@@ -152,7 +159,7 @@
                 <t t-if="show_manage_btn">
                     <a class="btn btn-link mb8 mt8" href="/my/payment_method">Manage your payment methods</a>
                 </t>
-                <button t-if="mode == 'manage' and list(filter(lambda x: x.payment_flow == 's2s', acquirers))" id="o_payment_form_add_pm" class="btn btn-primary btn-lg mb8 mt8">
+                <button t-if="mode == 'manage' and list(filter(lambda x: x.payment_flow == 's2s', acquirers))" type="submit" id="o_payment_form_add_pm" class="btn btn-primary btn-lg mb8 mt8">
                     <i class="fa fa-plus-circle"/> Add new card
                 </button>
             </div>

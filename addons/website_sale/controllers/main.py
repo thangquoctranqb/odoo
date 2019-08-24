@@ -218,10 +218,13 @@ class WebsiteSale(http.Controller):
     ], type='http', auth="public", website=True, sitemap=sitemap_shop)
     def shop(self, page=0, category=None, search='', ppg=False, **post):
         add_qty = int(post.get('add_qty', 1))
+        Category = request.env['product.public.category']
         if category:
-            category = request.env['product.public.category'].search([('id', '=', int(category))], limit=1)
+            category = Category.search([('id', '=', int(category))], limit=1)
             if not category or not category.can_access_from_current_website():
                 raise NotFound()
+        else:
+            category = Category
 
         if ppg:
             try:
@@ -255,24 +258,18 @@ class WebsiteSale(http.Controller):
 
         Product = request.env['product.template'].with_context(bin_size=True)
 
-        Category = request.env['product.public.category']
-        search_categories = False
         search_product = Product.search(domain)
+        website_domain = request.website.website_domain()
+        categs_domain = [('parent_id', '=', False)] + website_domain
         if search:
-            categories = search_product.mapped('public_categ_ids')
-            search_categories = Category.search([('id', 'parent_of', categories.ids)] + request.website.website_domain())
-            categs = search_categories.filtered(lambda c: not c.parent_id)
+            search_categories = Category.search([('product_tmpl_ids', 'in', search_product.ids)] + website_domain).parents_and_self
+            categs_domain.append(('id', 'in', search_categories.ids))
         else:
-            categs = Category.search([('parent_id', '=', False)] + request.website.website_domain())
+            search_categories = Category
+        categs = Category.search(categs_domain)
 
-        parent_category_ids = []
         if category:
             url = "/shop/category/%s" % slug(category)
-            parent_category_ids = [category.id]
-            current_category = category
-            while current_category.parent_id:
-                parent_category_ids.append(current_category.parent_id.id)
-                current_category = current_category.parent_id
 
         product_count = len(search_product)
         pager = request.website.pager(url=url, total=product_count, page=page, step=ppg, scope=7, url_args=post)
@@ -281,7 +278,7 @@ class WebsiteSale(http.Controller):
         ProductAttribute = request.env['product.attribute']
         if products:
             # get all products without limit
-            attributes = ProductAttribute.search([('attribute_line_ids.value_ids', '!=', False), ('attribute_line_ids.product_tmpl_id', 'in', search_product.ids)])
+            attributes = ProductAttribute.search([('product_tmpl_ids', 'in', search_product.ids)])
         else:
             attributes = ProductAttribute.browse(attributes_ids)
 
@@ -311,8 +308,7 @@ class WebsiteSale(http.Controller):
             'attributes': attributes,
             'compute_currency': compute_currency,
             'keep': keep,
-            'parent_category_ids': parent_category_ids,
-            'search_categories_ids': search_categories and search_categories.ids,
+            'search_categories_ids': search_categories.ids,
             'layout_mode': layout_mode,
         }
         if category:
@@ -378,9 +374,11 @@ class WebsiteSale(http.Controller):
     @http.route(['/shop/pricelist'], type='http', auth="public", website=True, sitemap=False)
     def pricelist(self, promo, **post):
         redirect = post.get('r', '/shop/cart')
-        pricelist = request.env['product.pricelist'].sudo().search([('code', '=', promo)], limit=1)
-        if not pricelist or (pricelist and not request.website.is_pricelist_available(pricelist.id)):
-            return request.redirect("%s?code_not_available=1" % redirect)
+        # empty promo code is used to reset/remove pricelist (see `sale_get_order()`)
+        if promo:
+            pricelist = request.env['product.pricelist'].sudo().search([('code', '=', promo)], limit=1)
+            if (not pricelist or (pricelist and not request.website.is_pricelist_available(pricelist.id))):
+                return request.redirect("%s?code_not_available=1" % redirect)
 
         request.website.sale_get_order(code=promo)
         return request.redirect(redirect)
@@ -624,7 +622,12 @@ class WebsiteSale(http.Controller):
         return partner_id
 
     def values_preprocess(self, order, mode, values):
-        return values
+        # Convert the values for many2one fields to integer since they are used as IDs
+        partner_fields = request.env['res.partner']._fields
+        return {
+            k: (bool(v) and int(v)) if k in partner_fields and partner_fields[k].type == 'many2one' else v
+            for k, v in values.items()
+        }
 
     def values_postprocess(self, order, mode, values, errors, error_msg):
         new_values = {}
@@ -637,13 +640,13 @@ class WebsiteSale(http.Controller):
                 if k not in ('field_required', 'partner_id', 'callback', 'submitted'): # classic case
                     _logger.debug("website_sale postprocess: %s value has been dropped (empty or not writable)" % k)
 
-        new_values['customer'] = True
         new_values['team_id'] = request.website.salesteam_id and request.website.salesteam_id.id
         new_values['user_id'] = request.website.salesperson_id and request.website.salesperson_id.id
-        new_values['website_id'] = request.website.id
 
-        if order.partner_id.id == request.website.user_id.sudo().partner_id.id:
-            # If the partner is public, we assign the company of the website
+        if request.website.specific_user_account:
+            new_values['website_id'] = request.website.id
+
+        if mode[0] == 'new':
             new_values['company_id'] = request.website.company_id.id
 
         lang = request.lang if request.lang in request.website.mapped('language_ids.code') else None
@@ -715,6 +718,8 @@ class WebsiteSale(http.Controller):
                 if mode[1] == 'billing':
                     order.partner_id = partner_id
                     order.onchange_partner_id()
+                    # This is the *only* thing that the front end user will see/edit anyway when choosing billing address
+                    order.partner_invoice_id = partner_id
                     if not kw.get('use_same'):
                         kw['callback'] = kw.get('callback') or \
                             (not order.only_services and (mode[0] == 'edit' and '/shop/checkout' or '/shop/address'))
@@ -839,9 +844,9 @@ class WebsiteSale(http.Controller):
         )
 
         domain = expression.AND([
-            ['&', ('website_published', '=', True), ('company_id', '=', order.company_id.id)],
+            ['&', ('state', 'in', ['enabled', 'test']), ('company_id', '=', order.company_id.id)],
             ['|', ('website_id', '=', False), ('website_id', '=', request.website.id)],
-            ['|', ('specific_countries', '=', False), ('country_ids', 'in', [order.partner_id.country_id.id])]
+            ['|', ('country_ids', '=', False), ('country_ids', 'in', [order.partner_id.country_id.id])]
         ])
         acquirers = request.env['payment.acquirer'].search(domain)
 
@@ -1063,13 +1068,13 @@ class WebsiteSale(http.Controller):
     # ------------------------------------------------------
 
     @http.route(['/shop/add_product'], type='json', auth="user", methods=['POST'], website=True)
-    def add_product(self, name=None, category=0, **post):
+    def add_product(self, name=None, category=None, **post):
         product = request.env['product.product'].create({
             'name': name or _("New Product"),
             'public_categ_ids': category,
             'website_id': request.website.id,
         })
-        return "/shop/product/%s?enable_editor=1" % slug(product.product_tmpl_id)
+        return "%s?enable_editor=1" % product.product_tmpl_id.website_url
 
     @http.route(['/shop/change_styles'], type='json', auth='user')
     def change_styles(self, id, style_id):

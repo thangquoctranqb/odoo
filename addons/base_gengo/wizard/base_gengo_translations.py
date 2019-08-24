@@ -31,9 +31,9 @@ class BaseGengoTranslations(models.TransientModel):
         res = super(BaseGengoTranslations, self).default_get(fields)
         res['authorized_credentials'], gengo = self.gengo_authentication()
         if 'lang_id' in fields:
-            res['lang_id'] = self.env['res.lang'].search([
-                ('code', '=', self.env.context.get('lang') or 'en_US')
-            ], limit=1).id
+            res['lang_id'] = self.env['res.lang']._lang_get_id(
+                self.env.context.get('lang') or 'en_US'
+            )
         return res
 
     sync_type = fields.Selection([
@@ -54,7 +54,6 @@ class BaseGengoTranslations(models.TransientModel):
         icp = self.env['ir.config_parameter'].sudo()
         return icp.get_param(self.GENGO_KEY, default="Undefined")
 
-    @api.multi
     def open_company(self):
         self.ensure_one()
         return {
@@ -92,7 +91,6 @@ class BaseGengoTranslations(models.TransientModel):
             _logger.exception('Gengo connection failed')
             return (False, _("Gengo connection failed with this message:\n``%s``") % e)
 
-    @api.multi
     def act_update(self):
         '''
         Function called by the wizard.

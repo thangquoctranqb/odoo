@@ -2,7 +2,8 @@
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
 import itertools
-
+import logging
+_logger = logging.getLogger(__name__)
 
 from odoo import api, fields, models, tools, _
 from odoo.exceptions import ValidationError, RedirectWarning, UserError
@@ -82,7 +83,10 @@ class ProductTemplate(models.Model):
         'Cost', compute='_compute_standard_price',
         inverse='_set_standard_price', search='_search_standard_price',
         digits='Product Price', groups="base.group_user",
-        help = "Cost used for stock valuation in standard price and as a first price to set in average/FIFO.")
+        help="""In Standard Price & AVCO: value of the product (automatically computed in AVCO).
+        In FIFO: value of the last unit that left the stock (automatically computed).
+        Used to value the product when the purchase cost is not known (e.g. inventory adjustment).
+        Used to compute margins on sale orders.""")
 
     volume = fields.Float(
         'Volume', compute='_compute_volume', inverse='_set_volume', digits='Volume', store=True)
@@ -107,8 +111,7 @@ class ProductTemplate(models.Model):
         default=_get_default_uom_id, required=True,
         help="Default unit of measure used for purchase orders. It must be in the same category as the default unit of measure.")
     company_id = fields.Many2one(
-        'res.company', 'Company',
-        default=lambda self: self.env.company, index=1)
+        'res.company', 'Company', index=1)
     packaging_ids = fields.One2many(
         'product.packaging', string="Product Packages", compute="_compute_packaging_ids", inverse="_set_packaging_ids",
         help="Gives the different ways to package the same product.")
@@ -143,19 +146,41 @@ class ProductTemplate(models.Model):
         '# Product Variants', compute='_compute_product_variant_count')
 
     # related to display product product information if is_product_variant
-    barcode = fields.Char('Barcode', oldname='ean13', related='product_variant_ids.barcode', readonly=False)
+    barcode = fields.Char('Barcode', related='product_variant_ids.barcode', readonly=False)
     default_code = fields.Char(
         'Internal Reference', compute='_compute_default_code',
         inverse='_set_default_code', store=True)
 
-    item_ids = fields.One2many('product.pricelist.item', 'product_tmpl_id', 'Pricelist Items')
+    pricelist_item_count = fields.Integer("Number of price rules", compute="_compute_item_count")
+
+    can_image_1024_be_zoomed = fields.Boolean("Can Image 1024 be zoomed", compute='_compute_can_image_1024_be_zoomed', store=True)
+    has_configurable_attributes = fields.Boolean("Is a configurable product", compute='_compute_has_configurable_attributes', store=True)
+
+    def _compute_item_count(self):
+        for template in self:
+            # Pricelist item count counts the rules applicable on current template or on its variants.
+            template.pricelist_item_count = template.env['product.pricelist.item'].search_count([
+                '|', ('product_tmpl_id', '=', template.id), ('product_id', 'in', template.product_variant_ids.ids)])
+
+    @api.depends('image_1920', 'image_1024')
+    def _compute_can_image_1024_be_zoomed(self):
+        for template in self:
+            template.can_image_1024_be_zoomed = template.image_1920 and tools.is_image_size_above(template.image_1920, template.image_1024)
+
+    @api.depends('attribute_line_ids', 'attribute_line_ids.value_ids', 'attribute_line_ids.attribute_id.create_variant')
+    def _compute_has_configurable_attributes(self):
+        """A product is considered configurable if:
+        - It has dynamic attributes
+        - It has any attribute line with at least 2 attribute values configured
+        """
+        for product in self:
+            product.has_configurable_attributes = product.has_dynamic_attributes() or any(len(ptal.value_ids) >= 2 for ptal in product.attribute_line_ids)
 
     @api.depends('product_variant_ids')
     def _compute_product_variant_id(self):
         for p in self:
             p.product_variant_id = p.product_variant_ids[:1].id
 
-    @api.multi
     def _compute_currency_id(self):
         main_company = self.env['res.company']._get_main_company()
         for template in self:
@@ -165,13 +190,11 @@ class ProductTemplate(models.Model):
         for template in self:
             template.cost_currency_id = self.env.company.currency_id.id
 
-    @api.multi
     def _compute_template_price(self):
         prices = self._compute_template_price_no_inverse()
         for template in self:
             template.price = prices.get(template.id, 0.0)
 
-    @api.multi
     def _compute_template_price_no_inverse(self):
         """The _compute_template_price writes the 'list_price' field with an inverse method
         This method allows computing the price without writing the 'list_price'
@@ -198,7 +221,6 @@ class ProductTemplate(models.Model):
 
         return prices
 
-    @api.multi
     def _set_template_price(self):
         if self._context.get('uom'):
             for template in self:
@@ -314,6 +336,8 @@ class ProductTemplate(models.Model):
         for p in self:
             if len(p.product_variant_ids) == 1:
                 p.packaging_ids = p.product_variant_ids.packaging_ids
+            else:
+                p.packaging_ids = False
 
     def _set_packaging_ids(self):
         for p in self:
@@ -370,16 +394,24 @@ class ProductTemplate(models.Model):
 
         return templates
 
-    @api.multi
     def write(self, vals):
         res = super(ProductTemplate, self).write(vals)
         if 'attribute_line_ids' in vals or vals.get('active'):
             self.create_variant_ids()
         if 'active' in vals and not vals.get('active'):
             self.with_context(active_test=False).mapped('product_variant_ids').write({'active': vals.get('active')})
+        if 'image_1920' in vals:
+            self.env['product.product'].invalidate_cache(fnames=[
+                'image_1920',
+                'image_1024',
+                'image_512',
+                'image_256',
+                'image_128',
+                'image_64',
+                'can_image_1024_be_zoomed',
+            ])
         return res
 
-    @api.multi
     @api.returns('self', lambda value: value.id)
     def copy(self, default=None):
         # TDE FIXME: should probably be copy_data
@@ -390,7 +422,6 @@ class ProductTemplate(models.Model):
             default['name'] = _("%s (copy)") % self.name
         return super(ProductTemplate, self).copy(default=default)
 
-    @api.multi
     def name_get(self):
         # Prefetch the fields used by the `name_get`, so `browse` doesn't fetch other fields
         self.read(['name', 'default_code'])
@@ -434,7 +465,26 @@ class ProductTemplate(models.Model):
             '', args=[('id', 'in', list(searched_ids))],
             operator='ilike', limit=limit, name_get_uid=name_get_uid)
 
-    @api.multi
+    def open_pricelist_rules(self):
+        self.ensure_one()
+        domain = ['|',
+            ('product_tmpl_id', '=', self.id),
+            ('product_id', 'in', self.product_variant_ids.ids)]
+        return {
+            'name': _('Price Rules'),
+            'view_mode': 'tree,form',
+            'views': [(self.env.ref('product.product_pricelist_item_tree_view_from_product').id, 'tree'), (False, 'form')],
+            'res_model': 'product.pricelist.item',
+            'type': 'ir.actions.act_window',
+            'target': 'current',
+            'domain': domain,
+            'context': {
+                'default_product_tmpl_id': self.id,
+                'default_applied_on': '1_product',
+                'product_without_variants': self.product_variant_count == 1,
+            },
+        }
+
     def price_compute(self, price_type, uom=False, currency=False, company=False):
         # TDE FIXME: delegate to template or not ? fields are reencoded here ...
         # compatibility about context keys used a bit everywhere in the code
@@ -475,17 +525,15 @@ class ProductTemplate(models.Model):
 
         return prices
 
-    @api.multi
     def create_variant_ids(self):
+        self.flush()
         Product = self.env["product.product"]
 
+        variants_to_create = []
+        variants_to_activate = Product
+        variants_to_unlink = Product
+
         for tmpl_id in self.with_context(active_test=False):
-            # Handle the variants for each template separately. This will be
-            # less efficient when called on a lot of products with few variants
-            # but it is better when there's a lot of variants on one template.
-            variants_to_create = []
-            variants_to_activate = self.env['product.product']
-            variants_to_unlink = self.env['product.product']
             # adding an attribute with only one value should not recreate product
             # write this attribute on every product to make sure we don't lose them
             variant_alone = tmpl_id.valid_product_template_attribute_line_ids.filtered(lambda line: line.attribute_id.create_variant == 'always' and len(line.value_ids) == 1).mapped('value_ids')
@@ -510,20 +558,22 @@ class ProductTemplate(models.Model):
                     for variant in tmpl_id.product_variant_ids
                 }
                 # For each possible variant, create if it doesn't exist yet.
+                current_variants_to_create = []
                 for value_ids in all_variants:
                     value_ids = frozenset(value_ids)
                     if value_ids not in existing_variants:
-                        variants_to_create.append({
+                        current_variants_to_create.append({
                             'product_tmpl_id': tmpl_id.id,
                             'attribute_value_ids': [(6, 0, list(value_ids))],
                             'active': tmpl_id.active,
                         })
-                        if len(variants_to_create) > 1000:
+                        if len(current_variants_to_create) > 1000:
                             raise UserError(_(
                                 'The number of variants to generate is too high. '
                                 'You should either not generate variants for each combination or generate them on demand from the sales order. '
                                 'To do so, open the form view of attributes and change the mode of *Create Variants*.'))
 
+                variants_to_create += current_variants_to_create
             # Check existing variants if any needs to be activated or unlinked.
             # - if the product is not active and has valid attributes and attribute values, it
             #   should be activated
@@ -531,50 +581,26 @@ class ProductTemplate(models.Model):
             #   deleted
             valid_value_ids = tmpl_id.valid_product_attribute_value_wnva_ids
             valid_attribute_ids = tmpl_id.valid_product_attribute_wnva_ids
+            seen_attributes = set(p.attribute_value_ids for p in tmpl_id.product_variant_ids if p.active)
             for product_id in tmpl_id.product_variant_ids:
                 if product_id._has_valid_attributes(valid_attribute_ids, valid_value_ids):
-                    if not product_id.active:
+                    if not product_id.active and product_id.attribute_value_ids not in seen_attributes:
                         variants_to_activate += product_id
+                        seen_attributes.add(product_id.attribute_value_ids)
                 else:
                     variants_to_unlink += product_id
 
-            if variants_to_activate:
-                variants_to_activate.write({'active': True})
-
-            # create new products
-            if variants_to_create:
-                Product.create(variants_to_create)
-
-            # Avoid access errors in case the products is shared amongst companies but the underlying
-            # objects are not. If unlink fails because of an AccessError (e.g. while recomputing
-            # fields), the 'write' call will fail as well for the same reason since the field has
-            # been set to recompute.
-            if variants_to_unlink:
-                variants_to_unlink.check_access_rights('unlink')
-                variants_to_unlink.check_access_rule('unlink')
-                variants_to_unlink.check_access_rights('write')
-                variants_to_unlink.check_access_rule('write')
-                variants_to_unlink = variants_to_unlink.sudo()
-            # unlink or inactive product
-            # try in batch first because it is much faster
-            try:
-                with self._cr.savepoint(), tools.mute_logger('odoo.sql_db'):
-                    variants_to_unlink.unlink()
-            except Exception:
-                # fall back to one by one if batch is not possible
-                for variant in variants_to_unlink:
-                    try:
-                        with self._cr.savepoint(), tools.mute_logger('odoo.sql_db'):
-                            variant.unlink()
-                    # We catch all kind of exception to be sure that the operation doesn't fail.
-                    except Exception:
-                        # Note: this can still fail if something is preventing from archiving.
-                        # This is the case from existing stock reordering rules.
-                        variant.write({'active': False})
+        if variants_to_activate:
+            variants_to_activate.write({'active': True})
+        if variants_to_create:
+            Product.create(variants_to_create)
+        if variants_to_unlink:
+            variants_to_unlink._unlink_or_archive()
 
         # prefetched o2m have to be reloaded (because of active_test)
         # (eg. product.template: product_variant_ids)
-        # We can't rely on existing invalidate_cache because of the savepoint.
+        # We can't rely on existing invalidate_cache because of the savepoint
+        # in _unlink_or_archive.
         self.invalidate_cache()
         return True
 
@@ -588,7 +614,7 @@ class ProductTemplate(models.Model):
         self.ensure_one()
         return any(a.create_variant == 'dynamic' for a in self.valid_product_attribute_ids)
 
-    @api.multi
+    @api.depends('attribute_line_ids', 'attribute_line_ids.value_ids')
     def _compute_valid_attributes(self):
         """A product template attribute line is considered valid if it has at
         least one possible value.
@@ -620,7 +646,6 @@ class ProductTemplate(models.Model):
             record.valid_product_attribute_ids = record.valid_product_template_attribute_line_ids.mapped('attribute_id')
             record.valid_product_attribute_wnva_ids = record.valid_product_template_attribute_line_wnva_ids.mapped('attribute_id')
 
-    @api.multi
     def _get_possible_variants(self, parent_combination=None):
         """Return the existing variants that are possible.
 
@@ -645,7 +670,6 @@ class ProductTemplate(models.Model):
         self.ensure_one()
         return self.product_variant_ids.filtered(lambda p: p._is_variant_possible(parent_combination))
 
-    @api.multi
     def _get_attribute_exclusions(self, parent_combination=None, parent_name=None):
         """Return the list of attribute exclusions of a product.
 
@@ -693,7 +717,6 @@ class ProductTemplate(models.Model):
 
         return result
 
-    @api.multi
     def _get_own_attribute_exclusions(self):
         """Get exclusions coming from the current template.
 
@@ -712,7 +735,6 @@ class ProductTemplate(models.Model):
             for ptav in product_template_attribute_values
         }
 
-    @api.multi
     def _get_parent_attribute_exclusions(self, parent_combination):
         """Get exclusions coming from the parent combination.
 
@@ -738,7 +760,6 @@ class ProductTemplate(models.Model):
 
         return result
 
-    @api.multi
     def _get_mapped_attribute_names(self, parent_combination=None):
         """ The name of every attribute values based on their id,
         used to explain in the interface why that combination is not available
@@ -757,7 +778,6 @@ class ProductTemplate(models.Model):
             for attribute_value in all_product_attribute_values
         }
 
-    @api.multi
     def _is_combination_possible(self, combination, parent_combination=None):
         """
         The combination is possible if it is not excluded by any rule
@@ -827,7 +847,6 @@ class ProductTemplate(models.Model):
 
         return True
 
-    @api.multi
     def _get_variant_for_combination(self, combination):
         """Get the variant matching the combination.
 
@@ -846,7 +865,51 @@ class ProductTemplate(models.Model):
         attribute_values = filtered_combination.mapped('product_attribute_value_id')
         return self.env['product.product'].browse(self._get_variant_id_for_combination(attribute_values))
 
-    @api.multi
+    def _create_product_variant(self, combination, log_warning=False):
+        """ Create if necessary and possible and return the product variant
+        matching the given combination for this template.
+
+        It is possible to create only if the template has dynamic attributes
+        and the combination itself is possible.
+
+        :param combination: the combination for which to get or create variant.
+            The combination must contain all necessary attributes, including
+            those of type no_variant. Indeed even though those attributes won't
+            be included in the variant if newly created, they are needed when
+            checking if the combination is possible.
+        :type combination: recordset of `product.template.attribute.value`
+
+        :param log_warning: whether a warning should be logged on fail
+        :type log_warning: bool
+
+        :return: the product variant matching the combination or none
+        :rtype: recordset of `product.product`
+        """
+        self.ensure_one()
+
+        Product = self.env['product.product']
+
+        product_variant = self._get_variant_for_combination(combination)
+        if product_variant:
+            return product_variant
+
+        if not self.has_dynamic_attributes():
+            if log_warning:
+                _logger.warning('The user #%s tried to create a variant for the non-dynamic product %s.' % (self.env.user.id, self.id))
+            return Product
+
+        if not self._is_combination_possible(combination):
+            if log_warning:
+                _logger.warning('The user #%s tried to create an invalid variant for the product %s.' % (self.env.user.id, self.id))
+            return Product
+
+        attribute_values = combination.mapped('product_attribute_value_id')._without_no_variant_attributes()
+
+        return Product.sudo().create({
+            'product_tmpl_id': self.id,
+            'attribute_value_ids': [(6, 0, attribute_values.ids)]
+        })
+
     @tools.ormcache('self.id', 'attribute_values')
     def _get_variant_id_for_combination(self, attribute_values):
         """See `_get_variant_for_combination`. This method returns an ID
@@ -868,7 +931,6 @@ class ProductTemplate(models.Model):
             lambda v: v.attribute_value_ids == attribute_values
         )[:1].id
 
-    @api.multi
     @tools.ormcache('self.id')
     def _get_first_possible_variant_id(self):
         """See `_create_first_product_variant`. This method returns an ID
@@ -876,7 +938,6 @@ class ProductTemplate(models.Model):
         self.ensure_one()
         return self._create_first_product_variant().id
 
-    @api.multi
     def _get_first_possible_combination(self, parent_combination=None, necessary_values=None):
         """See `_get_possible_combinations` (one iteration).
 
@@ -890,7 +951,6 @@ class ProductTemplate(models.Model):
         """
         return next(self._get_possible_combinations(parent_combination, necessary_values), self.env['product.template.attribute.value'])
 
-    @api.multi
     def _get_possible_combinations(self, parent_combination=None, necessary_values=None):
         """Generator returning combinations that are possible, following the
         sequence of attributes and values.
@@ -939,7 +999,6 @@ class ProductTemplate(models.Model):
 
         return _("There are no remaining possible combination.")
 
-    @api.multi
     def _get_closest_possible_combination(self, combination):
         """See `_get_closest_possible_combinations` (one iteration).
 
@@ -953,7 +1012,6 @@ class ProductTemplate(models.Model):
         """
         return next(self._get_closest_possible_combinations(combination), self.env['product.template.attribute.value'])
 
-    @api.multi
     def _get_closest_possible_combinations(self, combination):
         """Generator returning the possible combinations that are the closest to
         the given combination.
@@ -987,7 +1045,6 @@ class ProductTemplate(models.Model):
                     return _("There are no possible combination.")
                 combination = combination[:-1]
 
-    @api.multi
     def _get_current_company(self, **kwargs):
         """Get the most appropriate company for this product.
 
@@ -1002,7 +1059,6 @@ class ProductTemplate(models.Model):
         self.ensure_one()
         return self.company_id or self._get_current_company_fallback(**kwargs)
 
-    @api.multi
     def _get_current_company_fallback(self, **kwargs):
         """Fallback to get the most appropriate company for this product.
 
@@ -1016,6 +1072,20 @@ class ProductTemplate(models.Model):
         """
         self.ensure_one()
         return self.env.company
+
+    def get_single_product_variant(self):
+        """ Method used by the product configurator to check if the product is configurable or not.
+
+        We need to open the product configurator if the product:
+        - is configurable (see has_configurable_attributes)
+        - has optional products (method is extended in sale to return optional products info)
+        """
+        self.ensure_one()
+        if self.product_variant_count == 1 and not self.has_configurable_attributes:
+            return {
+                'product_id': self.product_variant_id.id,
+            }
+        return {}
 
     @api.model
     def get_empty_list_help(self, help):

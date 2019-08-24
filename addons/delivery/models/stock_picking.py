@@ -112,16 +112,13 @@ class StockPicking(models.Model):
         for picking in self:
             picking.weight = sum(move.weight for move in picking.move_lines if move.state != 'cancel')
 
-    @api.multi
-    def action_done(self):
-        res = super(StockPicking, self).action_done()
+    def _send_confirmation_email(self):
         for pick in self:
             if pick.carrier_id:
                 if pick.carrier_id.integration_level == 'rate_and_ship' and pick.picking_type_code != 'incoming':
                     pick.send_to_shipper()
-        return res
+        return super(StockPicking, self)._send_confirmation_email()
 
-    @api.multi
     def _pre_put_in_pack_hook(self, move_line_ids):
         res = super(StockPicking, self)._pre_put_in_pack_hook(move_line_ids)
         if not res:
@@ -151,29 +148,6 @@ class StockPicking(models.Model):
             ),
         }
 
-    @api.multi
-    def action_send_confirmation_email(self):
-        self.ensure_one()
-        delivery_template_id = self.env.ref('delivery.mail_template_data_delivery_confirmation').id
-        compose_form_id = self.env.ref('mail.email_compose_message_wizard_form').id
-        ctx = dict(
-            default_composition_mode='comment',
-            default_res_id=self.id,
-            default_model='stock.picking',
-            default_use_template=bool(delivery_template_id),
-            default_template_id=delivery_template_id,
-            custom_layout='mail.mail_notification_light'
-        )
-        return {
-            'type': 'ir.actions.act_window',
-            'view_mode': 'form',
-            'res_model': 'mail.compose.message',
-            'view_id': compose_form_id,
-            'target': 'new',
-            'context': ctx,
-        }
-
-    @api.multi
     def send_to_shipper(self):
         self.ensure_one()
         res = self.carrier_id.send_shipping(self)[0]
@@ -188,12 +162,10 @@ class StockPicking(models.Model):
         self._add_delivery_cost_to_so()
 
 
-    @api.multi
     def print_return_label(self):
         self.ensure_one()
         res = self.carrier_id.get_return_label(self)
 
-    @api.multi
     def _add_delivery_cost_to_so(self):
         self.ensure_one()
         sale_order = self.sale_id
@@ -209,7 +181,6 @@ class StockPicking(models.Model):
                     'name': sale_order.carrier_id.with_context(lang=self.partner_id.lang).name,
                 })
 
-    @api.multi
     def open_website_url(self):
         self.ensure_one()
         if not self.carrier_tracking_url:
@@ -242,7 +213,6 @@ class StockPicking(models.Model):
             picking.message_post(body=msg)
             picking.carrier_tracking_ref = False
 
-    @api.multi
     def check_packages_are_identical(self):
         '''Some shippers require identical packages in the same shipment. This utility checks it.'''
         self.ensure_one()
@@ -257,7 +227,6 @@ class StockPicking(models.Model):
 class StockReturnPicking(models.TransientModel):
     _inherit = 'stock.return.picking'
 
-    @api.multi
     def _create_returns(self):
         # Prevent copy of the carrier and carrier price when generating return picking
         # (we have no integration of returns for now)

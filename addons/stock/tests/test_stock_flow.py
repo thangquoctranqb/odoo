@@ -4,8 +4,20 @@ from odoo.addons.stock.tests.common import TestStockCommon
 from odoo.tests import Form
 from odoo.tools import mute_logger, float_round
 from odoo.exceptions import UserError
+from odoo import fields
 
 class TestStockFlow(TestStockCommon):
+    def setUp(cls):
+        super(TestStockFlow, cls).setUp()
+        cls.partner_company2 = cls.env['res.partner'].create({
+            'name': 'My Company (Chicago)-demo',
+            'email': 'chicago@yourcompany.com',
+            })
+        cls.company = cls.env['res.company'].create({
+            'currency_id': cls.env.ref('base.USD').id,
+            'partner_id': cls.partner_company2.id,
+            'name': 'My Company (Chicago)-demo',
+            })
 
     @mute_logger('odoo.addons.base.models.ir_model', 'odoo.models')
     def test_00_picking_create_and_transfer_quantity(self):
@@ -20,7 +32,6 @@ class TestStockFlow(TestStockCommon):
         # ----------------------------------------------------------------------
 
         picking_in = self.PickingObj.create({
-            'partner_id': self.partner_delta_id,
             'picking_type_id': self.picking_type_in,
             'location_id': self.supplier_location,
             'location_dest_id': self.stock_location})
@@ -157,7 +168,6 @@ class TestStockFlow(TestStockCommon):
         # ======================================================================
 
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
             'location_dest_id': self.customer_location})
@@ -438,7 +448,6 @@ class TestStockFlow(TestStockCommon):
         # ----------------------------------------------------------------------
 
         picking_in_A = self.PickingObj.create({
-            'partner_id': self.partner_delta_id,
             'picking_type_id': self.picking_type_in,
             'location_id': self.supplier_location,
             'location_dest_id': self.stock_location})
@@ -537,7 +546,6 @@ class TestStockFlow(TestStockCommon):
         # ----------------------------------------------------------------------
 
         picking_in_B = self.PickingObj.create({
-            'partner_id': self.partner_delta_id,
             'picking_type_id': self.picking_type_in,
             'location_id': self.supplier_location,
             'location_dest_id': self.stock_location})
@@ -730,7 +738,6 @@ class TestStockFlow(TestStockCommon):
 
         before_out_quantity = self.kgB.qty_available
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
             'location_dest_id': self.customer_location})
@@ -758,7 +765,7 @@ class TestStockFlow(TestStockCommon):
 
         # Check quantity difference after stock transfer.
         quantity_diff = before_out_quantity - self.kgB.qty_available
-        self.assertEqual(float_round(quantity_diff, precision_rounding=0.0001), 0.001, 'Wrong quantity diffrence.')
+        self.assertEqual(float_round(quantity_diff, precision_rounding=0.0001), 0.001, 'Wrong quantity difference.')
         self.assertEqual(self.kgB.qty_available, 0.039, 'Wrong quantity available (%s found instead of 0.039)' % (self.kgB.qty_available))
 
         # ======================================================================
@@ -772,7 +779,6 @@ class TestStockFlow(TestStockCommon):
         # ======================================================================
 
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
             'location_dest_id': self.customer_location})
@@ -893,7 +899,6 @@ class TestStockFlow(TestStockCommon):
 
         productKG = self.ProductObj.create({'name': 'Product KG', 'uom_id': self.uom_kg.id, 'uom_po_id': self.uom_kg.id, 'type': 'product'})
         picking_in = self.PickingObj.create({
-            'partner_id': self.partner_delta_id,
             'picking_type_id': self.picking_type_in,
             'location_id': self.supplier_location,
             'location_dest_id': self.stock_location})
@@ -942,7 +947,6 @@ class TestStockFlow(TestStockCommon):
         self.assertEqual(move.product_uom.id, self.uom_tone.id, 'Wrong unit of measure in done move.')
         self.assertEqual(productKG.qty_available, 1000, 'Wrong quantity available of product (%s found instead of 1000)' % (productKG.qty_available))
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
             'location_dest_id': self.customer_location})
@@ -1057,7 +1061,7 @@ class TestStockFlow(TestStockCommon):
         wizard.process()
         quants = self.StockQuantObj.search([('product_id', '=', productKG.id), ('location_id', '=', self.stock_location)])
         total_qty = [quant.quantity for quant in quants]
-        self.assertEqual(sum(total_qty), 999.9975, 'Expecting 999.9975 kg , got %.4f kg on location stock!' % (sum(total_qty)))
+        self.assertAlmostEqual(sum(total_qty), 999.9975, msg='Expecting 999.9975 kg , got %.4f kg on location stock!' % (sum(total_qty)))
 
     def test_20_create_inventory_with_different_uom(self):
         """Create inventory with different unit of measure."""
@@ -1200,7 +1204,6 @@ class TestStockFlow(TestStockCommon):
         picking_in.use_create_lots = False
         self.productA.tracking = 'lot'
         picking_in = self.PickingObj.create({
-            'partner_id': self.partner_delta_id,
             'picking_type_id': self.picking_type_in,
             'location_id': self.supplier_location,
             'location_dest_id': self.stock_location})
@@ -1227,7 +1230,6 @@ class TestStockFlow(TestStockCommon):
         wizard = self.env[(res_dict.get('res_model'))].browse(res_dict.get('res_id'))
         wizard.process()
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'name': 'testpicking',
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
@@ -1258,7 +1260,6 @@ class TestStockFlow(TestStockCommon):
     def test_40_pack_in_pack(self):
         """ Put a pack in pack"""
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.pack_location,
             'location_dest_id': self.customer_location})
@@ -1271,7 +1272,6 @@ class TestStockFlow(TestStockCommon):
             'location_id': self.pack_location,
             'location_dest_id': self.customer_location})
         picking_pack = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
             'location_dest_id': self.pack_location})
@@ -1285,7 +1285,6 @@ class TestStockFlow(TestStockCommon):
             'location_dest_id': self.pack_location,
             'move_dest_ids': [(4, move_out.id, 0)]})
         picking_in = self.PickingObj.create({
-            'partner_id': self.partner_delta_id,
             'picking_type_id': self.picking_type_in,
             'location_id': self.supplier_location,
             'location_dest_id': self.stock_location})
@@ -1379,7 +1378,6 @@ class TestStockFlow(TestStockCommon):
 
     def test_50_create_in_out_with_product_pack_lines(self):
         picking_in = self.PickingObj.create({
-            'partner_id': self.partner_delta_id,
             'picking_type_id': self.picking_type_in,
             'location_id': self.supplier_location,
             'location_dest_id': self.stock_location})
@@ -1407,7 +1405,6 @@ class TestStockFlow(TestStockCommon):
         self.assertEqual(sum(x.quantity for x in pack1.quant_ids), 4.0, 'Pack 1 should have 4 pieces')
         self.assertEqual(sum(x.quantity for x in pack2.quant_ids), 6.0, 'Pack 2 should have 6 pieces')
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
             'location_dest_id': self.customer_location})
@@ -1438,7 +1435,6 @@ class TestStockFlow(TestStockCommon):
 
     def test_60_create_in_out_with_product_pack_lines(self):
         picking_in = self.PickingObj.create({
-            'partner_id': self.partner_delta_id,
             'picking_type_id': self.picking_type_in,
             'location_id': self.supplier_location,
             'location_dest_id': self.stock_location})
@@ -1467,7 +1463,6 @@ class TestStockFlow(TestStockCommon):
         self.assertEqual(sum(x.quantity for x in pack1.quant_ids), 120, 'Pack 1 should have 120 pieces')
         self.assertEqual(sum(x.quantity for x in pack2.quant_ids), 80, 'Pack 2 should have 80 pieces')
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
             'location_dest_id': self.customer_location})
@@ -1530,7 +1525,6 @@ class TestStockFlow(TestStockCommon):
 
         # create a "all at once" delivery order for two products
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
             'location_dest_id': self.customer_location})
@@ -1578,7 +1572,6 @@ class TestStockFlow(TestStockCommon):
         # -----------------------------------------------------------
         # create a "all at once" delivery order for two products
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
             'location_dest_id': self.customer_location})
@@ -1622,7 +1615,6 @@ class TestStockFlow(TestStockCommon):
 
         # create a "partial" delivery order for two products
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
             'location_dest_id': self.customer_location})
@@ -1669,7 +1661,6 @@ class TestStockFlow(TestStockCommon):
         # "partial" and "force assign" scenario
         # -----------------------------------------------------------
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
             'location_dest_id': self.customer_location})
@@ -1694,7 +1685,6 @@ class TestStockFlow(TestStockCommon):
         changes to 'confirmed'.
         """
         picking_out = self.PickingObj.create({
-            'partner_id': self.partner_agrolite_id,
             'picking_type_id': self.picking_type_out,
             'location_id': self.stock_location,
             'location_dest_id': self.customer_location})
@@ -1754,7 +1744,6 @@ class TestStockFlow(TestStockCommon):
         """
 
         picking = self.PickingObj.create({
-            'partner_id': self.partner_delta_id,
             'picking_type_id': self.picking_type_in,
             'location_id': self.supplier_location,
             'location_dest_id': self.stock_location})
@@ -1806,7 +1795,7 @@ class TestStockFlow(TestStockCommon):
         self.env.user.write({'groups_id': [(4, grp_multi_routes.id)]})
         self.env.user.write({'groups_id': [(4, grp_multi_companies.id)]})
 
-        company_2 = self.env.ref('stock.res_company_1')
+        company_2 = self.company
         # Need to add a new company on user.
         self.env.user.write({'company_ids': [(4, company_2.id)]})
 
@@ -1870,7 +1859,7 @@ class TestStockFlow(TestStockCommon):
         self.env.user.write({'groups_id': [(4, grp_multi_routes.id)]})
         self.env.user.write({'groups_id': [(4, grp_multi_companies.id)]})
 
-        company_2 = self.env.ref('stock.res_company_1')
+        company_2 = self.company
         # Need to add a new company on user.
         self.env.user.write({'company_ids': [(4, company_2.id)]})
 
@@ -1955,3 +1944,33 @@ class TestStockFlow(TestStockCommon):
         self.assertEqual(incoming_picking.move_lines.mapped('company_id'), self.env.company)
         self.assertEqual(outgoing_picking.company_id, company_3)
         self.assertEqual(outgoing_picking.move_lines.company_id, company_3)
+
+    def test_picking_scheduled_date_readonlyness(self):
+        """ As it seems we keep breaking this thing over and over this small
+        test ensure the scheduled_date is writable on a picking in state 'draft' or 'confirmed'
+        """
+        partner = self.env['res.partner'].create({'name': 'Hubert Bonisseur de la Bath'})
+        product = self.env['product.product'].create({'name': 'Un petit coup de polish', 'type': 'product'})
+        wh = self.env['stock.warehouse'].search([('company_id', '=', self.env.company.id)], limit=1)
+
+        f = Form(self.env['stock.picking'], view='stock.view_picking_form')
+        f.partner_id = partner
+        f.picking_type_id = wh.out_type_id
+        with f.move_ids_without_package.new() as move:
+            move.product_id = product
+            move.product_uom_qty = 5
+        f.scheduled_date = fields.Datetime.now()
+        picking = f.save()
+
+        f = Form(picking, view='stock.view_picking_form')
+        f.scheduled_date = fields.Datetime.now()
+        picking = f.save()
+
+        self.assertEquals(f.state, 'draft')
+        picking.action_confirm()
+
+        f = Form(picking, view='stock.view_picking_form')
+        f.scheduled_date = fields.Datetime.now()
+        picking = f.save()
+
+        self.assertEquals(f.state, 'confirmed')

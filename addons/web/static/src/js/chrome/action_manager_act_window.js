@@ -295,6 +295,7 @@ ActionManager.include({
             }
 
             var lazyViewDef;
+            var lazyControllerID;
             if (lazyView) {
                 // if the main view is lazy-loaded, its (lazy-loaded) controller is inserted
                 // into the controller stack (so that breadcrumbs can be correctly computed),
@@ -304,6 +305,7 @@ ActionManager.include({
                 // this controller being lazy-loaded, this call is actually sync
                 lazyViewDef = self._createViewController(action, lazyView.type, {}, {lazy: true})
                     .then(function (lazyLoadedController) {
+                        lazyControllerID = lazyLoadedController.jsID;
                         self.controllerStack.push(lazyLoadedController.jsID);
                     });
             }
@@ -322,7 +324,13 @@ ActionManager.include({
                     action.controllerID = controller.jsID;
                     return self._executeAction(action, options);
                 })
-                .guardedCatch(self._destroyWindowAction.bind(self, action));
+                .guardedCatch(function () {
+                    if (lazyControllerID) {
+                        var index = self.controllerStack.indexOf(lazyControllerID);
+                        self.controllerStack = self.controllerStack.slice(0, index);
+                    }
+                    self._destroyWindowAction(action);
+                });
         });
     },
     /**
@@ -689,6 +697,7 @@ ActionManager.include({
                 };
             }
             var options = {on_close: ev.data.on_closed};
+            action.flags = _.extend({}, action.flags, {withSearchPanel: false});
             return self.doAction(action, options).then(ev.data.on_success, ev.data.on_fail);
         });
     },
@@ -711,8 +720,10 @@ ActionManager.include({
             // only switch to the requested view if the controller that
             // triggered the request is the current controller
             var action = this.actions[currentController.actionID];
+            var currentControllerState = currentController.widget.exportState();
+            action.controllerState = _.extend({}, action.controllerState, currentControllerState);
             var options = {
-                controllerState: currentController.widget.exportState(),
+                controllerState: action.controllerState,
                 currentId: ev.data.res_id,
             };
             if (ev.data.mode) {

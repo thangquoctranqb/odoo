@@ -36,7 +36,7 @@ var Followers = AbstractField.extend({
     init: function (parent, name, record, options) {
         this._super.apply(this, arguments);
 
-        this.image = this.attrs.image || 'image_small';
+        this.image = this.attrs.image || 'image_64';
         this.comment = this.attrs.help || false;
 
         this.followers = [];
@@ -120,7 +120,7 @@ var Followers = AbstractField.extend({
             }
 
             $follower_li = $(QWeb.render('mail.Followers.partner', {
-                'record': _.extend(record, {'avatar_url': '/web/image/' + record.res_model + '/' + record.res_id + '/image_small'}),
+                'record': _.extend(record, {'avatar_url': '/web/image/' + record.res_model + '/' + record.res_id + '/image_64'}),
                 'widget': self})
             );
             $follower_li.appendTo($followers_list);
@@ -205,7 +205,7 @@ var Followers = AbstractField.extend({
         if (missing_ids.length) {
             def = this._rpc({
                     route: '/mail/read_followers',
-                    params: { follower_ids: missing_ids, res_model: this.model }
+                    params: { follower_ids: missing_ids, res_model: this.model, context: {} }  // empty context to be overridden in session.js with 'allowed_company_ids'
                 });
         }
         return Promise.resolve(def).then(function (results) {
@@ -241,28 +241,37 @@ var Followers = AbstractField.extend({
     },
     /**
      * Remove partners or channels from the followers
+     *
+     * @private
+     * @param {Object} ids
+     * @param {Array} [ids.partner_ids] the partner ids
+     * @param {Array} [ids.channel_ids] the channel ids
+     */
+    _messageUnsubscribe: function (ids) {
+        return this._rpc({
+            model: this.model,
+            method: 'message_unsubscribe',
+            args: [[this.res_id], ids.partner_ids, ids.channel_ids],
+        }).then(this._reload.bind(this));
+    },
+    /**
+     * Remove partners or channels from the followers
      * @param {Array} [ids.partner_ids] the partner ids
      * @param {Array} [ids.channel_ids] the channel ids
      */
     _unfollow: function (ids) {
         var self = this;
+        // do not prompt confirmation dialog on unsubscribe of current user.
+        if (_.isEqual(ids.partner_ids, [this.partnerID]) && _.isEmpty(ids.channel_ids)) {
+            return this._messageUnsubscribe(ids);
+        }
         return new Promise(function (resolve, reject) {
             var follower = _.find(self.followers, { res_id: ids.partner_ids ? ids.partner_ids[0] : ids.channel_ids[0] });
             var text = _.str.sprintf(_t("If you remove a follower, he won't be notified of any email or discussion on this document. Do you really want to remove %s?"), follower.name);
             Dialog.confirm(this, text, {
                 title: _t("Warning"),
                 confirm_callback: function () {
-                    var args = [
-                        [self.res_id],
-                        ids.partner_ids,
-                        ids.channel_ids,
-                    ];
-                    self._rpc({
-                        model: self.model,
-                        method: 'message_unsubscribe',
-                        args: args
-                    })
-                    .then(self._reload.bind(self));
+                    self._messageUnsubscribe(ids);
                     resolve();
                 },
                 cancel_callback: reject,

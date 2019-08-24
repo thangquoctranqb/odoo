@@ -107,7 +107,6 @@ class Groups(models.Model):
         ('name_uniq', 'unique (category_id, name)', 'The name of the group must be unique within an application!')
     ]
 
-    @api.multi
     @api.constrains('users')
     def _check_one_user_type(self):
         self.users._check_one_user_type()
@@ -161,7 +160,6 @@ class Groups(models.Model):
             return len(groups) if count else groups.ids
         return super(Groups, self)._search(args, offset=offset, limit=limit, order=order, count=count, access_rights_uid=access_rights_uid)
 
-    @api.multi
     def copy(self, default=None):
         self.ensure_one()
         chosen_name = default.get('name') if default else ''
@@ -169,15 +167,16 @@ class Groups(models.Model):
         default = dict(default or {}, name=default_name)
         return super(Groups, self).copy(default)
 
-    @api.multi
     def write(self, vals):
         if 'name' in vals:
             if vals['name'].startswith('-'):
                 raise UserError(_('The name of the group can not start with "-"'))
         # invalidate caches before updating groups, since the recomputation of
         # field 'share' depends on method has_group()
-        self.env['ir.model.access'].call_cache_clearing_methods()
-        self.env['res.users'].has_group.clear_cache(self.env['res.users'])
+        # DLE P139
+        if self.ids:
+            self.env['ir.model.access'].call_cache_clearing_methods()
+            self.env['res.users'].has_group.clear_cache(self.env['res.users'])
         return super(Groups, self).write(vals)
 
 
@@ -204,9 +203,9 @@ class Users(models.Model):
     __uid_cache = defaultdict(dict)             # {dbname: {uid: password}}
 
     # User can write on a few of his own fields (but not his groups for example)
-    SELF_WRITEABLE_FIELDS = ['signature', 'action_id', 'company_id', 'email', 'name', 'image', 'image_medium', 'image_small', 'lang', 'tz']
+    SELF_WRITEABLE_FIELDS = ['signature', 'action_id', 'company_id', 'email', 'name', 'image_1920', 'lang', 'tz']
     # User can read a few of his own fields
-    SELF_READABLE_FIELDS = ['signature', 'company_id', 'login', 'email', 'name', 'image', 'image_medium', 'image_small', 'lang', 'tz', 'tz_offset', 'groups_id', 'partner_id', '__last_update', 'action_id']
+    SELF_READABLE_FIELDS = ['signature', 'company_id', 'login', 'email', 'name', 'image_1920', 'image_1024', 'image_512', 'image_256', 'image_128', 'image_64', 'lang', 'tz', 'tz_offset', 'groups_id', 'partner_id', '__last_update', 'action_id']
 
     def _default_groups(self):
         default_user = self.env.ref('base.default_user', raise_if_not_found=False)
@@ -227,7 +226,7 @@ class Users(models.Model):
         help="Specify a value only when creating a user or if you're "\
              "changing the user's password, otherwise leave empty. After "\
              "a change of password, the user has to login again.")
-    signature = fields.Html()
+    signature = fields.Html(string="Email Signature")
     active = fields.Boolean(default=True)
     active_partner = fields.Boolean(related='partner_id.active', readonly=True, string="Partner is Active")
     action_id = fields.Many2one('ir.actions.actions', string='Home Action',
@@ -243,7 +242,7 @@ class Users(models.Model):
     # Special behavior for this field: res.company.search() will only return the companies
     # available to the current user (should be the user's companies?), when the user_preference
     # context is set.
-    company_id = fields.Many2one('res.company', string='Default Company', required=True, default=lambda self: self.env.company.id,
+    company_id = fields.Many2one('res.company', string='Company', required=True, default=lambda self: self.env.company.id,
         help='The default company for this user.', context={'user_preference': True})
     company_ids = fields.Many2many('res.company', 'res_company_users_rel', 'user_id', 'cid',
         string='Companies', default=lambda self: self.env.company.ids)
@@ -348,7 +347,6 @@ class Users(models.Model):
         for user in self:
             user.share = not user.has_group('base.group_user')
 
-    @api.multi
     def _compute_companies_count(self):
         companies_count = self._companies_count()
         for user in self:
@@ -376,10 +374,10 @@ class Users(models.Model):
     def onchange_parent_id(self):
         return self.partner_id.onchange_parent_id()
 
-    def _read_from_database(self, field_names, inherited_field_names=[]):
-        super(Users, self)._read_from_database(field_names, inherited_field_names)
+    def _read(self, fields):
+        super(Users, self)._read(fields)
         canwrite = self.check_access_rights('write', raise_exception=False)
-        if not canwrite and set(USER_PRIVATE_FIELDS).intersection(field_names):
+        if not canwrite and set(USER_PRIVATE_FIELDS).intersection(fields):
             for record in self:
                 for f in USER_PRIVATE_FIELDS:
                     try:
@@ -389,34 +387,29 @@ class Users(models.Model):
                         # skip SpecialValue (e.g. for missing record or access right)
                         pass
 
-    @api.multi
     @api.constrains('company_id', 'company_ids')
     def _check_company(self):
         if any(user.company_ids and user.company_id not in user.company_ids for user in self):
             raise ValidationError(_('The chosen company is not in the allowed companies for this user'))
 
-    @api.multi
     @api.constrains('action_id')
     def _check_action_id(self):
         action_open_website = self.env.ref('base.action_open_website', raise_if_not_found=False)
         if action_open_website and any(user.action_id.id == action_open_website.id for user in self):
             raise ValidationError(_('The "App Switcher" action cannot be selected as home action.'))
 
-    @api.multi
     @api.constrains('groups_id')
     def _check_one_user_type(self):
         for user in self:
             if len(user.groups_id.filtered(lambda x: x.category_id.xml_id == 'base.module_category_user_type')) > 1:
                 raise ValidationError(_('The user cannot have more than one user types.'))
 
-    @api.multi
     def toggle_active(self):
         for user in self:
             if not user.active and not user.partner_id.active:
                 user.partner_id.toggle_active()
         super(Users, self).toggle_active()
 
-    @api.multi
     def read(self, fields=None, load='_classic_read'):
         if fields and self == self.env.user:
             for key in fields:
@@ -446,14 +439,11 @@ class Users(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        users = super(Users, self.with_context(default_customer=False)).create(vals_list)
+        users = super(Users, self).create(vals_list)
         for user in users:
-            user.partner_id.active = user.active
-            if user.partner_id.company_id:
-                user.partner_id.write({'company_id': user.company_id.id})
+            user.partner_id.write({'company_id': user.company_id.id, 'active': user.active})
         return users
 
-    @api.multi
     def write(self, values):
         if values.get('active') and SUPERUSER_ID in self._ids:
             raise UserError(_("You cannot activate the superuser."))
@@ -485,7 +475,9 @@ class Users(models.Model):
             self.env['ir.default'].clear_caches()
 
         # clear caches linked to the users
-        if 'groups_id' in values:
+        if self.ids and 'groups_id' in values:
+            # DLE P139: Calling invalidate_cache on a new, well you lost everything as you wont be able to take it back from the cache
+            # `test_00_equipment_multicompany_user`
             self.env['ir.model.access'].call_cache_clearing_methods()
             self.env['ir.rule'].clear_caches()
             self.has_group.clear_cache(self)
@@ -500,7 +492,6 @@ class Users(models.Model):
 
         return res
 
-    @api.multi
     def unlink(self):
         if SUPERUSER_ID in self.ids:
             raise UserError(_('You can not remove the admin user as it is used internally for resources created by Odoo (updates, module installation, ...)'))
@@ -522,7 +513,6 @@ class Users(models.Model):
             user_ids = self._search(expression.AND([[('name', operator, name)], args]), limit=limit, access_rights_uid=name_get_uid)
         return self.browse(user_ids).name_get()
 
-    @api.multi
     def copy(self, default=None):
         self.ensure_one()
         default = dict(default or {})
@@ -659,7 +649,6 @@ class Users(models.Model):
         # keep in the cache the token
         return h.hexdigest()
 
-    @api.multi
     def _invalidate_session_cache(self):
         """ Clear the sessions cache """
         self._compute_session_token.clear_cache(self)
@@ -680,14 +669,12 @@ class Users(models.Model):
             return self.env.user.write({'password': new_passwd})
         raise UserError(_("Setting empty passwords is not allowed for security reasons!"))
 
-    @api.multi
     def preference_save(self):
         return {
             'type': 'ir.actions.client',
             'tag': 'reload_context',
         }
 
-    @api.multi
     def preference_change_password(self):
         return {
             'type': 'ir.actions.client',
@@ -758,22 +745,18 @@ class Users(models.Model):
             'target': 'current',
         }
 
-    @api.multi
     def _is_public(self):
         self.ensure_one()
         return self.has_group('base.group_public')
 
-    @api.multi
     def _is_system(self):
         self.ensure_one()
         return self.has_group('base.group_system')
 
-    @api.multi
     def _is_admin(self):
         self.ensure_one()
         return self._is_superuser() or self.has_group('base.group_erp_manager')
 
-    @api.multi
     def _is_superuser(self):
         self.ensure_one()
         return self.id == SUPERUSER_ID
@@ -880,7 +863,7 @@ class Users(models.Model):
         cfg = self.env['ir.config_parameter'].sudo()
         min_failures = int(cfg.get_param('base.login_cooldown_after', 5))
         if min_failures == 0:
-            return True
+            return False
 
         delay = int(cfg.get_param('base.login_cooldown_duration', 60))
         return failures >= min_failures and (datetime.datetime.now() - previous) < datetime.timedelta(seconds=delay)
@@ -922,7 +905,6 @@ class GroupsImplied(models.Model):
                 group.write({'users': user_ids})
         return groups
 
-    @api.multi
     def write(self, values):
         res = super(GroupsImplied, self).write(values)
         if values.get('users') or values.get('implied_ids'):
@@ -970,7 +952,6 @@ class UsersImplied(models.Model):
                 values['groups_id'] = type(self).groups_id.convert_to_write(gs, user)
         return super(UsersImplied, self).create(vals_list)
 
-    @api.multi
     def write(self, values):
         res = super(UsersImplied, self).write(values)
         if values.get('groups_id'):
@@ -1017,7 +998,6 @@ class GroupsView(models.Model):
         self.env['ir.actions.actions'].clear_caches()
         return user
 
-    @api.multi
     def write(self, values):
         res = super(GroupsView, self).write(values)
         self._update_user_groups_view()
@@ -1025,7 +1005,6 @@ class GroupsView(models.Model):
         self.env['ir.actions.actions'].clear_caches()
         return res
 
-    @api.multi
     def unlink(self):
         res = super(GroupsView, self).unlink()
         self._update_user_groups_view()
@@ -1164,6 +1143,21 @@ class GroupsView(models.Model):
         return res
 
 
+class ModuleCategory(models.Model):
+    _inherit = "ir.module.category"
+
+    def write(self, values):
+        res = super().write(values)
+        if "name" in values:
+            self.env["res.groups"]._update_user_groups_view()
+        return res
+
+    def unlink(self):
+        res = super().unlink()
+        self.env["res.groups"]._update_user_groups_view()
+        return res
+
+
 class UsersView(models.Model):
     _inherit = 'res.users'
 
@@ -1179,7 +1173,6 @@ class UsersView(models.Model):
                 user.write({'groups_id': [(4, group_multi_company.id)]})
         return user
 
-    @api.multi
     def write(self, values):
         values = self._remove_reified_groups(values)
         res = super(UsersView, self).write(values)
@@ -1236,7 +1229,6 @@ class UsersView(models.Model):
         self._add_reified_groups(group_fields, values)
         return values
 
-    @api.multi
     def read(self, fields=None, load='_classic_read'):
         # determine whether reified groups fields are required, and which ones
         fields1 = fields or list(self.fields_get())
@@ -1332,7 +1324,6 @@ class ChangePasswordWizard(models.TransientModel):
 
     user_ids = fields.One2many('change.password.user', 'wizard_id', string='Users', default=_default_user_ids)
 
-    @api.multi
     def change_password_button(self):
         self.ensure_one()
         self.user_ids.change_password_button()
@@ -1351,7 +1342,6 @@ class ChangePasswordUser(models.TransientModel):
     user_login = fields.Char(string='User Login', readonly=True)
     new_passwd = fields.Char(string='New Password', default='')
 
-    @api.multi
     def change_password_button(self):
         for line in self:
             if not line.new_passwd:

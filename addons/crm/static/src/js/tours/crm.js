@@ -63,12 +63,12 @@ tour.register('crm_tour', {
         actions.auto(".o_kanban_record .oe_kanban_action[data-type=edit]");
     },
 }, {
-    trigger: ".o_opportunity_form .o_chatter_button_new_message",
+    trigger: ".o_lead_opportunity_form .o_chatter_button_new_message",
     content: _t('<p><b>Send messages</b> to your prospect and get replies automatically attached to this opportunity.</p><p class="mb0">Type <i>\'@\'</i> to mention people - it\'s like cc-ing on emails.</p>'),
     position: "bottom"
 }, {
     trigger: ".breadcrumb-item:not(.active):last",
-    extra_trigger: '.o_opportunity_form',
+    extra_trigger: '.o_lead_opportunity_form',
     content: _t("Use the breadcrumbs to <b>go back to your sales pipeline</b>."),
     position: "bottom"
 }, tour.STEPS.TOGGLE_HOME_MENU, tour.STEPS.SHOW_APPS_MENU_ITEM, {
@@ -82,7 +82,7 @@ tour.register('crm_tour', {
     position: "bottom",
     edition: 'enterprise'
 }, {
-    trigger: ".o_web_settings_dashboard .o_user_emails",
+    trigger: "div#invite_users .o_user_emails",
     content: _t("<b>Invite coworkers</b> via email.<br/><i>Enter one email per line.</i>"),
     position: "right"
 }, tour.STEPS.TOGGLE_HOME_MENU, tour.STEPS.SHOW_APPS_MENU_ITEM, {

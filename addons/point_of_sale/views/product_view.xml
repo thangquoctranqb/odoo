@@ -83,7 +83,7 @@
     <menuitem id="pos_config_menu_action_product_pricelist"
         parent="point_of_sale.pos_config_menu_catalog"
         action="product.product_pricelist_action2"
-        groups="product.group_sale_pricelist"
+        groups="product.group_product_pricelist"
         sequence="20"/>
 
     <record id="product_uom_categ_form_view" model="ir.ui.view">
@@ -92,6 +92,17 @@
         <field name="inherit_id" ref="uom.product_uom_categ_form_view"/>
         <field name="arch" type="xml">
             <xpath expr="//field[@name='name']" position="after">
+                <field name="is_pos_groupable" groups="base.group_no_one"/>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="product_uom_categ_tree_view" model="ir.ui.view">
+        <field name="name">uom.category.tree.inherit</field>
+        <field name="model">uom.category</field>
+        <field name="inherit_id" ref="uom.product_uom_categ_tree_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='measure_type']" position="after">
                 <field name="is_pos_groupable" groups="base.group_no_one"/>
             </xpath>
         </field>

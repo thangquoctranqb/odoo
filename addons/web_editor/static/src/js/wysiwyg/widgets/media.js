@@ -429,9 +429,10 @@ var FileWidget = SearchableMediaWidget.extend({
         this._highlightSelected();
 
         // adapt load more
+        var noLoadMoreButton = this.NUMBER_OF_ATTACHMENTS_TO_DISPLAY >= this.attachments.length;
         var noMoreImgToLoad = this.numberOfAttachmentsToDisplay >= this.attachments.length;
+        this.$('.o_load_done_msg').toggleClass('d-none', noLoadMoreButton || !noMoreImgToLoad);
         this.$('.o_load_more').toggleClass('d-none', noMoreImgToLoad);
-        this.$('.o_load_done_msg').toggleClass('d-none', !noMoreImgToLoad);
     },
     /**
      * @private
@@ -683,7 +684,11 @@ var FileWidget = SearchableMediaWidget.extend({
                 }).then(function (prevented) {
                     if (_.isEmpty(prevented)) {
                         self.attachments = _.without(self.attachments, attachment);
-                        $a.closest('.o_existing_attachment_cell').remove();
+                        if (!self.attachments.length) {
+                            self._renderImages(); //render the message and image if empty
+                        } else {
+                            $a.closest('.o_existing_attachment_cell').remove();
+                        }
                         return;
                     }
                     self.$errorText.replaceWith(QWeb.render('wysiwyg.widgets.image.existing.error', {
@@ -820,6 +825,14 @@ var DocumentWidget = FileWidget.extend({
         this._super.apply(this, arguments);
         this.$addUrlButton.text((isURL && isImage) ? _t("Add as image") : _t("Add document"));
         this.$urlWarning.toggleClass('d-none', !isURL || !isImage);
+    },
+    /**
+     * @override
+     */
+    _getAttachmentsDomain: function (needle) {
+        var domain = this._super.apply(this, arguments);
+        // the assets should not be part of the documents
+        return domain.concat('!', utils.assetsDomain());
     },
 });
 
@@ -1063,8 +1076,11 @@ var VideoWidget = MediaWidget.extend({
             }
         }
         var allVideoClasses = /(^|\s)media_iframe_video(\s|$)/g;
-        this.media.className = this.media.className && this.media.className.replace(allVideoClasses, ' ');
-        this.media.innerHTML = '';
+        var isVideo = this.media.className && this.media.className.match(allVideoClasses);
+        if (isVideo) {
+            this.media.className = this.media.className.replace(allVideoClasses, ' ');
+            this.media.innerHTML = '';
+        }
     },
     /**
      * Creates a video node according to the given URL and options. If not
@@ -1108,7 +1124,7 @@ var VideoWidget = MediaWidget.extend({
             return {errorCode: 0};
         }
 
-        var autoplay = options.autoplay ? '?autoplay=1' : '?autoplay=0';
+        var autoplay = options.autoplay ? '?autoplay=1&mute=1' : '?autoplay=0';
 
         if (ytMatch && ytMatch[2].length === 11) {
             $video.attr('src', '//www.youtube' + (ytMatch[1] || '') + '.com/embed/' + ytMatch[2] + autoplay);
@@ -1137,7 +1153,8 @@ var VideoWidget = MediaWidget.extend({
             $video.attr('src', $video.attr('src') + '&rel=0');
         }
         if (options.loop && (ytMatch || vimMatch)) {
-            $video.attr('src', $video.attr('src') + '&loop=1');
+            var videoSrc = _.str.sprintf('%s&loop=1', $video.attr('src'));
+            $video.attr('src', ytMatch ? _.str.sprintf('%s&playlist=%s', videoSrc, ytMatch[2]) : videoSrc);
         }
         if (options.hide_controls && (ytMatch || dmMatch)) {
             $video.attr('src', $video.attr('src') + '&controls=0');

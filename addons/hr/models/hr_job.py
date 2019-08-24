@@ -22,7 +22,7 @@ class Job(models.Model):
     employee_ids = fields.One2many('hr.employee', 'job_id', string='Employees', groups='base.group_user')
     description = fields.Text(string='Job Description')
     requirements = fields.Text('Requirements')
-    department_id = fields.Many2one('hr.department', string='Department')
+    department_id = fields.Many2one('hr.department', string='Department', domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]")
     company_id = fields.Many2one('res.company', string='Company', default=lambda self: self.env.company)
     state = fields.Selection([
         ('recruit', 'Recruitment in Progress'),
@@ -46,7 +46,6 @@ class Job(models.Model):
         """ We don't want the current user to be follower of all created job """
         return super(Job, self.with_context(mail_create_nosubscribe=True)).create(values)
 
-    @api.multi
     @api.returns('self', lambda value: value.id)
     def copy(self, default=None):
         self.ensure_one()
@@ -55,14 +54,12 @@ class Job(models.Model):
             default['name'] = _("%s (copy)") % (self.name)
         return super(Job, self).copy(default=default)
 
-    @api.multi
     def set_recruit(self):
         for record in self:
             no_of_recruitment = 1 if record.no_of_recruitment == 0 else record.no_of_recruitment
             record.write({'state': 'recruit', 'no_of_recruitment': no_of_recruitment})
         return True
 
-    @api.multi
     def set_open(self):
         return self.write({
             'state': 'open',

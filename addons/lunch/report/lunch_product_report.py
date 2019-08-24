@@ -51,7 +51,6 @@ class LunchProductReport(models.Model):
 
         return expression.OR([[('supplier_id.available_location_ids', 'in', value)], [('supplier_id.available_location_ids', '=', False)]])
 
-    @api.multi
     def write(self, values):
         user_id = self.env.user.id
         if 'is_favorite' in values:
@@ -83,7 +82,7 @@ class LunchProductReport(models.Model):
                     product.new_until >= current_date AS is_new,
                     orders.last_order_date
                 FROM lunch_product product
-                INNER JOIN res_users users ON users.company_id = product.company_id -- multi company
+                INNER JOIN res_users users ON product.company_id IS NULL OR users.company_id = product.company_id -- multi company
                 INNER JOIN res_groups_users_rel groups ON groups.uid = users.id -- only generate for internal users
                 LEFT JOIN LATERAL (select max(date) AS last_order_date FROM lunch_order where user_id=users.id and product_id=product.id) AS orders ON TRUE
                 LEFT JOIN LATERAL (select user_id FROM lunch_product_favorite_user_rel where user_id=users.id and product_id=product.id) AS fav ON TRUE

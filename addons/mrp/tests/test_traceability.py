@@ -104,7 +104,7 @@ class TestTraceability(TestMrpCommon):
             for line in lines:
                 tracking = line['columns'][1].split(' ')[1]
                 self.assertEqual(
-                    line['columns'][-1], "1.000 Unit(s)", 'Part with tracking type "%s", should have quantity = 1' % (tracking)
+                    line['columns'][-1], "1.000 Units", 'Part with tracking type "%s", should have quantity = 1' % (tracking)
                 )
                 unfoldable = False if tracking == 'none' else True
                 self.assertEqual(
@@ -228,13 +228,13 @@ class TestTraceability(TestMrpCommon):
 
         raw_move_lines = mo.move_raw_ids.mapped('move_line_ids')
         raw_line_raw_1_lot_1 = raw_move_lines.filtered(lambda ml: ml.lot_id.name == 'Raw_1_lot_1')
-        self.assertEqual(raw_line_raw_1_lot_1.lot_produced_ids.mapped('name'), ['Final_lot_1', 'Byproduct_1_lot_1', 'Byproduct_2_lot_1'])
+        self.assertEqual(set(raw_line_raw_1_lot_1.lot_produced_ids.mapped('name')), set(['Final_lot_1', 'Byproduct_1_lot_1', 'Byproduct_2_lot_1']))
         raw_line_raw_1_lot_2 = raw_move_lines.filtered(lambda ml: ml.lot_id.name == 'Raw_1_lot_2')
-        self.assertEqual(raw_line_raw_1_lot_2.lot_produced_ids.mapped('name'), ['Final_lot_2', 'Byproduct_1_lot_2', 'Byproduct_2_lot_2'])
+        self.assertEqual(set(raw_line_raw_1_lot_2.lot_produced_ids.mapped('name')), set(['Final_lot_2', 'Byproduct_1_lot_2', 'Byproduct_2_lot_2']))
         raw_line_raw_2_lot_1 = raw_move_lines.filtered(lambda ml: ml.lot_id.name == 'Raw_2_lot_1')
-        self.assertEqual(raw_line_raw_2_lot_1.lot_produced_ids.mapped('name'), ['Final_lot_1', 'Byproduct_1_lot_1', 'Byproduct_2_lot_1'])
+        self.assertEqual(set(raw_line_raw_2_lot_1.lot_produced_ids.mapped('name')), set(['Final_lot_1', 'Byproduct_1_lot_1', 'Byproduct_2_lot_1']))
         raw_line_raw_2_lot_2 = raw_move_lines.filtered(lambda ml: ml.lot_id.name == 'Raw_2_lot_2')
-        self.assertEqual(raw_line_raw_2_lot_2.lot_produced_ids.mapped('name'), ['Final_lot_2', 'Byproduct_1_lot_2', 'Byproduct_2_lot_2'])
+        self.assertEqual(set(raw_line_raw_2_lot_2.lot_produced_ids.mapped('name')), set(['Final_lot_2', 'Byproduct_1_lot_2', 'Byproduct_2_lot_2']))
 
         finished_move_lines = mo.move_finished_ids.mapped('move_line_ids')
         finished_move_line_lot_1 = finished_move_lines.filtered(lambda ml: ml.lot_id.name == 'Final_lot_1')

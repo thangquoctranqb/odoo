@@ -40,7 +40,6 @@ class AccountInvoiceSend(models.TransientModel):
         })
         return res
 
-    @api.multi
     @api.onchange('invoice_ids')
     def _compute_composition_mode(self):
         for wizard in self:
@@ -67,15 +66,15 @@ class AccountInvoiceSend(models.TransientModel):
                         )
                 else:
                     wizard.invoice_without_email = False
+            else:
+                wizard.invoice_without_email = False
 
-    @api.multi
     def _send_email(self):
         if self.is_email:
             self.composer_id.send_mail()
             if self.env.context.get('mark_invoice_as_sent'):
                 self.mapped('invoice_ids').write({'invoice_sent': True})
 
-    @api.multi
     def _print_document(self):
         """ to override for each type of models that will use this composer."""
         self.ensure_one()
@@ -83,15 +82,28 @@ class AccountInvoiceSend(models.TransientModel):
         action.update({'close_on_report_download': True})
         return action
 
-    @api.multi
     def send_and_print_action(self):
         self.ensure_one()
-        self._send_email()
+        # Send the mails in the correct language by splitting the ids per lang.
+        # This should ideally be fixed in mail_compose_message, so when a fix is made there this whole commit should be reverted.
+        # basically self.body (which could be manually edited) extracts self.template_id,
+        # which is then not translated for each customer.
+        if self.composition_mode == 'mass_mail' and self.template_id:
+            active_ids = self.env.context.get('active_ids', self.res_id)
+            active_records = self.env[self.model].browse(active_ids)
+            langs = active_records.mapped('partner_id.lang')
+            default_lang = self.env.context.get('lang', 'en_US')
+            for lang in (set(langs) or [default_lang]):
+                active_ids_lang = active_records.filtered(lambda r: r.partner_id.lang == lang).ids
+                self_lang = self.with_context(active_ids=active_ids_lang, lang=lang)
+                self_lang.onchange_template_id()
+                self_lang._send_email()
+        else:
+            self._send_email()
         if self.is_print:
             return self._print_document()
         return {'type': 'ir.actions.act_window_close'}
 
-    @api.multi
     def save_as_template(self):
         self.ensure_one()
         self.composer_id.save_as_template()

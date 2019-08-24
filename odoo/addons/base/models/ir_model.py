@@ -5,6 +5,7 @@ import dateutil
 import itertools
 import logging
 import time
+from ast import literal_eval
 from collections import defaultdict, Mapping
 from operator import itemgetter
 
@@ -109,7 +110,7 @@ class IrModel(models.Model):
     transient = fields.Boolean(string="Transient Model")
     modules = fields.Char(compute='_in_modules', string='In Apps', help='List of modules in which the object is defined or inherited')
     view_ids = fields.One2many('ir.ui.view', compute='_view_ids', string='Views')
-    count = fields.Integer(compute='_compute_count', string="Count (incl. archived)",
+    count = fields.Integer(compute='_compute_count', string="Count (Incl. Archived)",
                            help="Total number of records in this model")
 
     @api.depends()
@@ -196,7 +197,6 @@ class IrModel(models.Model):
                 _logger.warning('The model %s could not be dropped because it did not exist in the registry.', model.model)
         return True
 
-    @api.multi
     def unlink(self):
         # Prevent manual deletion of module tables
         if not self._context.get(MODULE_UNINSTALL_FLAG):
@@ -220,7 +220,6 @@ class IrModel(models.Model):
 
         return res
 
-    @api.multi
     def write(self, vals):
         if '__last_update' in self._context:
             self = self.with_context({k: v for k, v in self._context.items() if k != '__last_update'})
@@ -337,11 +336,11 @@ class IrModelFields(models.Model):
     field_description = fields.Char(string='Field Label', default='', required=True, translate=True)
     help = fields.Text(string='Field Help', translate=True)
     ttype = fields.Selection(selection=FIELD_TYPES, string='Field Type', required=True)
-    selection = fields.Char(string='Selection Options', default="",
-                            help="List of options for a selection field, "
-                                 "specified as a Python expression defining a list of (key, label) pairs. "
-                                 "For example: [('blue','Blue'),('yellow','Yellow')]")
-    copied = fields.Boolean(string='Copied', oldname='copy',
+    selection = fields.Char(string="Selection Options (Deprecated)",
+                            compute='_compute_selection', inverse='_inverse_selection')
+    selection_ids = fields.One2many("ir.model.fields.selection", "field_id",
+                                    string="Selection Options", copy=True)
+    copied = fields.Boolean(string='Copied',
                             help="Whether the value is copied when duplicating a record.")
     related = fields.Char(string='Related Field', help="The corresponding related field, if any. This must be a dot-separated list of field names.")
     related_field_id = fields.Many2one('ir.model.fields', compute='_compute_related_field_id',
@@ -386,6 +385,19 @@ class IrModelFields(models.Model):
                 field = rec._related_field()
                 rec.related_field_id = self._get(field.model_name, field.name)
 
+    @api.depends('selection_ids')
+    def _compute_selection(self):
+        for rec in self:
+            if rec.ttype in ('selection', 'reference'):
+                rec.selection = str(self.env['ir.model.fields.selection']._get_selection(rec.id))
+            else:
+                rec.selection = False
+
+    def _inverse_selection(self):
+        for rec in self:
+            selection = literal_eval(rec.selection or "[]")
+            self.env['ir.model.fields.selection']._update_selection(rec.model, rec.name, selection)
+
     @api.depends()
     def _in_modules(self):
         installed_modules = self.env['ir.module.module'].search([('state', '=', 'installed')])
@@ -394,18 +406,6 @@ class IrModelFields(models.Model):
         for field in self:
             module_names = set(xml_id.split('.')[0] for xml_id in xml_ids[field.id])
             field.modules = ", ".join(sorted(installed_names & module_names))
-
-    @api.model
-    def _check_selection(self, selection):
-        try:
-            items = safe_eval(selection)
-            if not (isinstance(items, (tuple, list)) and
-                    all(isinstance(item, (tuple, list)) and len(item) == 2 for item in items)):
-                raise ValueError(selection)
-        except Exception:
-            _logger.info('Invalid selection list definition for fields.selection', exc_info=True)
-            raise UserError(_("The Selection Options expression is not a valid Pythonic expression. "
-                              "Please provide an expression in the [('key','Label'), ...] format."))
 
     @api.constrains('domain')
     def _check_domain(self):
@@ -558,7 +558,6 @@ class IrModelFields(models.Model):
         result = self.env.cr.fetchone()
         return result and result[0]
 
-    @api.multi
     def _drop_column(self):
         tables_to_drop = set()
 
@@ -593,7 +592,6 @@ class IrModelFields(models.Model):
 
         return True
 
-    @api.multi
     def _prepare_update(self):
         """ Check whether the fields in ``self`` may be modified or removed.
             This method prevents the modification/deletion of many2one fields
@@ -608,9 +606,9 @@ class IrModelFields(models.Model):
                 else:
                     # field hasn't been loaded (yet?)
                     continue
-                for dependant, path in model._field_triggers.get(field, ()):
-                    if dependant.manual:
-                        failed_dependencies.append((field, dependant))
+                for dep in model._dependent_fields(field):
+                    if dep.manual:
+                        failed_dependencies.append((field, dep))
                 for inverse in model._field_inverses.get(field, ()):
                     if inverse.manual and inverse.type == 'one2many':
                         failed_dependencies.append((field, inverse))
@@ -627,6 +625,12 @@ class IrModelFields(models.Model):
         if not self:
             return
 
+        # remove pending write of this field
+        # DLE P16: if there are pending towrite of the field we currently try to unlink, pop them out from the towrite queue
+        # test `test_unlink_with_dependant`
+        for record in self:
+            for record_values in self.env.all.towrite[record.model].values():
+                record_values.pop(record.name, None)
         # remove fields from registry, and check that views are not broken
         fields = [self.env[record.model]._pop_field(record.name) for record in self]
         domain = expression.OR([('arch_db', 'like', record.name)] for record in self)
@@ -650,7 +654,6 @@ class IrModelFields(models.Model):
             # the registry has been modified, restore it
             self.pool.setup_models(self._cr)
 
-    @api.multi
     def unlink(self):
         if not self:
             return True
@@ -683,10 +686,6 @@ class IrModelFields(models.Model):
         if 'model_id' in vals:
             model_data = self.env['ir.model'].browse(vals['model_id'])
             vals['model'] = model_data.model
-        if vals.get('ttype') == 'selection':
-            if not vals.get('selection'):
-                raise UserError(_('For selection fields, the Selection Options must be given!'))
-            self._check_selection(vals['selection'])
 
         res = super(IrModelFields, self).create(vals)
 
@@ -709,7 +708,6 @@ class IrModelFields(models.Model):
 
         return res
 
-    @api.multi
     def write(self, vals):
         # if set, *one* column can be renamed here
         column_rename = None
@@ -718,10 +716,6 @@ class IrModelFields(models.Model):
         patched_models = set()
 
         if vals and self:
-            # check selection if given
-            if vals.get('selection'):
-                self._check_selection(vals['selection'])
-
             for item in self:
                 if item.state != 'manual':
                     raise UserError(_('Properties of base fields cannot be altered in this manner! '
@@ -761,6 +755,7 @@ class IrModelFields(models.Model):
 
         res = super(IrModelFields, self).write(vals)
 
+        self.flush()
         self.clear_caches()                         # for _existing_field_data()
 
         if column_rename:
@@ -782,7 +777,6 @@ class IrModelFields(models.Model):
 
         return res
 
-    @api.multi
     def name_get(self):
         res = []
         for field in self:
@@ -851,8 +845,13 @@ class IrModelFields(models.Model):
                 keys = [key for key in new_vals if old_vals[key] != new_vals[key]]
                 self.pool.post_init(record.modified, keys)
                 old_vals.update(new_vals)
-            if module and not field.manual and (module == model._original_module or module in field._modules):
-                to_xmlids.append(name)
+            if module and (module == model._original_module or module in field._modules):
+                # remove this and only keep the else clause if version >= saas-12.4
+                if field.manual:
+                    self.pool.loaded_xmlids.add(
+                        '%s.field_%s__%s' % (module, model._name.replace('.', '_'), name))
+                else:
+                    to_xmlids.append(name)
 
         if to_insert:
             # insert missing fields
@@ -910,7 +909,7 @@ class IrModelFields(models.Model):
             attrs['translate'] = bool(field_data['translate'])
             attrs['size'] = field_data['size'] or None
         elif field_data['ttype'] in ('selection', 'reference'):
-            attrs['selection'] = safe_eval(field_data['selection'])
+            attrs['selection'] = self.env['ir.model.fields.selection']._get_selection(field_data['id'])
         elif field_data['ttype'] == 'many2one':
             if not self.pool.loaded and field_data['relation'] not in self.env:
                 return
@@ -959,6 +958,197 @@ class IrModelFields(models.Model):
                     model._add_field(name, field)
 
 
+class IrModelSelection(models.Model):
+    _name = 'ir.model.fields.selection'
+    _order = 'sequence, id'
+    _description = "Fields Selection"
+
+    field_id = fields.Many2one("ir.model.fields",
+        required=True, ondelete="cascade", index=True,
+        domain=[('ttype', 'in', ['selection', 'reference'])])
+    value = fields.Char(required=True)
+    name = fields.Char(translate=True, required=True)
+    sequence = fields.Integer(default=1000)
+
+    _sql_constraints = [
+        ('selection_field_uniq', 'unique(field_id, value)',
+         'Selections values must be unique per field'),
+    ]
+
+    def _get_selection(self, field_id):
+        """ Return the given field's selection as a list of pairs (value, string). """
+        self.flush(['value', 'name', 'field_id', 'sequence'])
+        self._cr.execute("""
+            SELECT value, name
+            FROM ir_model_fields_selection
+            WHERE field_id=%s
+            ORDER BY sequence, id
+        """, (field_id,))
+        return self._cr.fetchall()
+
+    def _reflect_model(self, model):
+        """ Reflect the given model's fields' selections. """
+        module = self._context.get('module')
+        model_name = model._name.replace('.', '_')
+        xml_id_pattern = '%s.selection__%s__%s__%s'
+        to_xmlids = []
+
+        def make_xml_id(field_name, value):
+            # the field value may contains exotic chars like spaces
+            sanitized_value = value.replace('.', '_').replace(' ', '_').lower()
+            return xml_id_pattern % (module, model_name, field_name, sanitized_value)
+
+        # determine fields to reflect
+        fields_to_reflect = [
+            field
+            for field in model._fields.values()
+            if field.type in ('selection', 'reference')
+        ]
+
+        for field in fields_to_reflect:
+            # if selection is callable, make sure the reflection is empty
+            selection = field.selection if isinstance(field.selection, list) else []
+            rows = self._update_selection(model._name, field.name, selection)
+
+            # prepare update of XML ids below
+            if module:
+                for value, modules in field._selection_modules(model).items():
+                    if module in modules:
+                        to_xmlids.append(dict(
+                            xml_id=make_xml_id(field.name, value),
+                            record=self.browse(rows[value]['id']),
+                        ))
+
+        # create/update XML ids
+        if to_xmlids:
+            self.env['ir.model.data']._update_xmlids(to_xmlids)
+
+    def _update_selection(self, model_name, field_name, selection):
+        """ Set the selection of a field to the given list, and return the row
+            values of the given selection records.
+        """
+        field_id = self.env['ir.model.fields']._get(model_name, field_name).id
+
+        # selection rows {value: row}
+        cur_rows = self._existing_selection_data(model_name, field_name)
+        new_rows = {
+            value: dict(value=value, name=label, sequence=index)
+            for index, (value, label) in enumerate(selection)
+        }
+
+        rows_to_insert = []
+        rows_to_update = []
+        rows_to_remove = []
+        for value in new_rows.keys() | cur_rows.keys():
+            new_row, cur_row = new_rows.get(value), cur_rows.get(value)
+            if new_row is None:
+                if self.pool.ready:
+                    # removing a selection in the new list, at your own risks
+                    _logger.warning("Removing selection value %s on %s.%s",
+                                    cur_row['value'], model_name, field_name)
+                    rows_to_remove.append(cur_row['id'])
+            elif cur_row is None:
+                rows_to_insert.append(dict(new_row, field_id=field_id))
+            elif any(new_row[key] != cur_row[key] for key in new_row):
+                rows_to_update.append(dict(new_row, id=cur_row['id']))
+
+        if rows_to_insert:
+            row_ids = query_insert(self.env.cr, self._table, rows_to_insert)
+            # update cur_rows for output
+            for row, row_id in zip(rows_to_insert, row_ids):
+                cur_rows[row['value']] = dict(row, id=row_id)
+
+        for row in rows_to_update:
+            query_update(self.env.cr, self._table, row, ['id'])
+
+        if rows_to_remove:
+            self.browse(rows_to_remove).unlink()
+
+        return cur_rows
+
+    def _existing_selection_data(self, model_name, field_name):
+        """ Return the selection data of the given model, by field and value, as
+            a dict {field_name: {value: row_values}}.
+        """
+        query = """
+            SELECT s.*
+            FROM ir_model_fields_selection s
+            JOIN ir_model_fields f ON s.field_id=f.id
+            WHERE f.model=%s and f.name=%s
+        """
+        self._cr.execute(query, [model_name, field_name])
+        return {row['value']: row for row in self._cr.dictfetchall()}
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        field_ids = {vals['field_id'] for vals in vals_list}
+        for field in self.env['ir.model.fields'].browse(field_ids):
+            if field.state != 'manual':
+                raise UserError(_('Properties of base fields cannot be altered in this manner! '
+                                  'Please modify them through Python code, '
+                                  'preferably through a custom addon!'))
+        recs = super().create(vals_list)
+
+        # setup models; this re-initializes model in registry
+        self.pool.setup_models(self._cr)
+
+        return recs
+
+    def write(self, vals):
+        if (
+            not self.env.user._is_admin() and
+            any(record.field_id.state != 'manual' for record in self)
+        ):
+            raise UserError(_('Properties of base fields cannot be altered in this manner! '
+                              'Please modify them through Python code, '
+                              'preferably through a custom addon!'))
+
+        if 'value' in vals:
+            for selection in self:
+                if selection.value == vals['value']:
+                    continue
+                if selection.field_id.store:
+                    # replace the value by the new one in the field's corresponding column
+                    query = "UPDATE {table} SET {field}=%s WHERE {field}=%s".format(
+                        table=self.env[selection.field_id.model]._table,
+                        field=selection.field_id.name,
+                    )
+                    self.env.cr.execute(query, [vals['value'], selection.value])
+
+        result = super().write(vals)
+
+        # setup models; this re-initializes model in registry
+        self.pool.setup_models(self._cr)
+
+        return result
+
+    def unlink(self):
+        # Prevent manual deletion of module columns
+        if (
+            self.pool.ready
+            and any(selection.field_id.state != 'manual' for selection in self)
+        ):
+            raise UserError(_('Properties of base fields cannot be altered in this manner! '
+                              'Please modify them through Python code, '
+                              'preferably through a custom addon!'))
+
+        for selection in self:
+            if selection.field_id.store:
+                # replace the value by NULL in the field's corresponding column
+                query = "UPDATE {table} SET {field}=NULL WHERE {field}=%s".format(
+                    table=self.env[selection.field_id.model]._table,
+                    field=selection.field_id.name,
+                )
+                self.env.cr.execute(query, [selection.value])
+
+        result = super().unlink()
+
+        # setup models; this re-initializes model in registry
+        self.pool.setup_models(self._cr)
+
+        return result
+
+
 class IrModelConstraint(models.Model):
     """
     This model tracks PostgreSQL foreign keys and constraints used by Odoo
@@ -970,20 +1160,20 @@ class IrModelConstraint(models.Model):
     name = fields.Char(string='Constraint', required=True, index=True,
                        help="PostgreSQL constraint or foreign key name.")
     definition = fields.Char(help="PostgreSQL constraint definition")
+    message = fields.Char(help="Error message returned when the constraint is violated.", translate=True)
     model = fields.Many2one('ir.model', required=True, ondelete="cascade", index=True)
     module = fields.Many2one('ir.module.module', required=True, index=True)
     type = fields.Char(string='Constraint Type', required=True, size=1, index=True,
                        help="Type of the constraint: `f` for a foreign key, "
                             "`u` for other constraints.")
-    date_update = fields.Datetime(string='Update Date')
-    date_init = fields.Datetime(string='Initialization Date')
+    write_date = fields.Datetime()
+    create_date = fields.Datetime()
 
     _sql_constraints = [
         ('module_name_uniq', 'unique(name, module)',
          'Constraints with the same name are unique per module.'),
     ]
 
-    @api.multi
     def _module_data_uninstall(self):
         """
         Delete PostgreSQL foreign keys and constraints tracked by this model.
@@ -1027,15 +1217,15 @@ class IrModelConstraint(models.Model):
 
         self.unlink()
 
-    @api.multi
     def copy(self, default=None):
         default = dict(default or {})
         default['name'] = self.name + '_copy'
         return super(IrModelConstraint, self).copy(default)
 
-    def _reflect_constraint(self, model, conname, type, definition, module):
-        """ Reflect the given constraint, to make it possible to delete it later
-            when the module is uninstalled. ``type`` is either 'f' or 'u'
+    def _reflect_constraint(self, model, conname, type, definition, module, message=None):
+        """ Reflect the given constraint, and return its corresponding record.
+            The reflection makes it possible to remove a constraint when its
+            corresponding module is uninstalled. ``type`` is either 'f' or 'u'
             depending on the constraint being a foreign key or not.
         """
         if not module:
@@ -1044,23 +1234,34 @@ class IrModelConstraint(models.Model):
             return
         assert type in ('f', 'u')
         cr = self._cr
-        query = """ SELECT type, definition
+        query = """ SELECT c.id, type, definition, message
                     FROM ir_model_constraint c, ir_module_module m
                     WHERE c.module=m.id AND c.name=%s AND m.name=%s """
         cr.execute(query, (conname, module))
         cons = cr.dictfetchone()
         if not cons:
             query = """ INSERT INTO ir_model_constraint
-                            (name, date_init, date_update, module, model, type, definition)
-                        VALUES (%s, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC',
-                            (SELECT id FROM ir_module_module WHERE name=%s),
-                            (SELECT id FROM ir_model WHERE model=%s), %s, %s) """
-            cr.execute(query, (conname, module, model._name, type, definition))
-        elif cons['type'] != type or (definition and cons['definition'] != definition):
+                            (name, create_date, write_date, create_uid, write_uid, module, model, type, definition, message)
+                        VALUES (%s,
+                                now() AT TIME ZONE 'UTC',
+                                now() AT TIME ZONE 'UTC',
+                                %s, %s,
+                                (SELECT id FROM ir_module_module WHERE name=%s),
+                                (SELECT id FROM ir_model WHERE model=%s),
+                                %s, %s, %s)
+                        RETURNING id"""
+            cr.execute(query,
+                (conname, self.env.uid, self.env.uid, module, model._name, type, definition, message))
+            return self.browse(cr.fetchone()[0])
+
+        cons_id = cons.pop('id')
+        if cons != dict(type=type, definition=definition, message=message):
             query = """ UPDATE ir_model_constraint
-                        SET date_update=now() AT TIME ZONE 'UTC', type=%s, definition=%s
-                        WHERE name=%s AND module=(SELECT id FROM ir_module_module WHERE name=%s) """
-            cr.execute(query, (type, definition, conname, module))
+                        SET write_date=now() AT TIME ZONE 'UTC',
+                            write_uid=%s, type=%s, definition=%s, message=%s
+                        WHERE id=%s"""
+            cr.execute(query, (self.env.uid, type, definition, message, cons_id))
+        return self.browse(cons_id)
 
     def _reflect_model(self, model):
         """ Reflect the _sql_constraints of the given model. """
@@ -1075,10 +1276,16 @@ class IrModelConstraint(models.Model):
             for constraint in getattr(cls, '_local_sql_constraints', ())
         }
 
-        for (key, definition, _) in model._sql_constraints:
+        data_list = []
+        for (key, definition, message) in model._sql_constraints:
             conname = '%s_%s' % (model._table, key)
             module = constraint_module.get(key)
-            self._reflect_constraint(model, conname, 'u', cons_text(definition), module)
+            record = self._reflect_constraint(model, conname, 'u', cons_text(definition), module, message)
+            if record:
+                xml_id = '%s.constraint_%s' % (module, conname)
+                data_list.append(dict(xml_id=xml_id, record=record))
+
+        self.env['ir.model.data']._update_xmlids(data_list)
 
 
 class IrModelRelation(models.Model):
@@ -1093,10 +1300,9 @@ class IrModelRelation(models.Model):
                        help="PostgreSQL table name implementing a many2many relation.")
     model = fields.Many2one('ir.model', required=True, index=True)
     module = fields.Many2one('ir.module.module', required=True, index=True)
-    date_update = fields.Datetime(string='Update Date')
-    date_init = fields.Datetime(string='Initialization Date')
+    write_date = fields.Datetime()
+    create_date = fields.Datetime()
 
-    @api.multi
     def _module_data_uninstall(self):
         """
         Delete PostgreSQL many2many relations tracked by this model.
@@ -1135,11 +1341,15 @@ class IrModelRelation(models.Model):
                     WHERE r.module=m.id AND r.name=%s AND m.name=%s """
         cr.execute(query, (table, module))
         if not cr.rowcount:
-            query = """ INSERT INTO ir_model_relation (name, date_init, date_update, module, model)
-                        VALUES (%s, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC',
+            query = """ INSERT INTO ir_model_relation
+                            (name, create_date, write_date, create_uid, write_uid, module, model)
+                        VALUES (%s,
+                                now() AT TIME ZONE 'UTC',
+                                now() AT TIME ZONE 'UTC',
+                                %s, %s,
                                 (SELECT id FROM ir_module_module WHERE name=%s),
                                 (SELECT id FROM ir_model WHERE model=%s)) """
-            cr.execute(query, (table, module, model._name))
+            cr.execute(query, (table, self.env.uid, self.env.uid, module, model._name))
             self.invalidate_cache()
 
 
@@ -1304,12 +1514,10 @@ class IrModelAccess(models.Model):
         self.call_cache_clearing_methods()
         return super(IrModelAccess, self).create(vals_list)
 
-    @api.multi
     def write(self, values):
         self.call_cache_clearing_methods()
         return super(IrModelAccess, self).write(values)
 
-    @api.multi
     def unlink(self):
         self.call_cache_clearing_methods()
         return super(IrModelAccess, self).unlink()
@@ -1360,7 +1568,6 @@ class IrModelData(models.Model):
                            self._table, ['model', 'res_id'])
         return res
 
-    @api.multi
     def name_get(self):
         model_id_name = defaultdict(dict)       # {res_model: {res_id: name}}
         for xid in self:
@@ -1456,7 +1663,6 @@ class IrModelData(models.Model):
         """
         return self.xmlid_to_object("%s.%s" % (module, xml_id), raise_if_not_found=True)
 
-    @api.multi
     def unlink(self):
         """ Regular unlink method, but make sure to clear the caches. """
         self.clear_caches()
@@ -1576,6 +1782,7 @@ class IrModelData(models.Model):
         records_items = []              # [(model, id)]
         model_ids = []
         field_ids = []
+        selection_ids = []
         constraint_ids = []
 
         module_data = self.search([('module', 'in', modules_to_remove)], order='id DESC')
@@ -1584,6 +1791,8 @@ class IrModelData(models.Model):
                 model_ids.append(data.res_id)
             elif data.model == 'ir.model.fields':
                 field_ids.append(data.res_id)
+            elif data.model == 'ir.model.fields.selection':
+                selection_ids.append(data.res_id)
             elif data.model == 'ir.model.constraint':
                 constraint_ids.append(data.res_id)
             else:
@@ -1650,8 +1859,9 @@ class IrModelData(models.Model):
         constraints = self.env['ir.model.constraint'].search([('module', 'in', modules.ids)])
         constraints._module_data_uninstall()
 
-        # remove fields and relations
+        # remove fields, selections and relations
         delete(self.env['ir.model.fields'].browse(field_ids))
+        delete(self.env['ir.model.fields.selection'].browse(selection_ids))
         relations = self.env['ir.model.relation'].search([('module', 'in', modules.ids)])
         relations._module_data_uninstall()
 
@@ -1720,7 +1930,6 @@ class WizardModelMenu(models.TransientModel):
     menu_id = fields.Many2one('ir.ui.menu', string='Parent Menu', required=True, ondelete='cascade')
     name = fields.Char(string='Menu Name', required=True)
 
-    @api.multi
     def menu_create(self):
         for menu in self:
             model = self.env['ir.model'].browse(self._context.get('model_id'))

@@ -16,15 +16,14 @@ class Department(models.Model):
     complete_name = fields.Char('Complete Name', compute='_compute_complete_name', store=True)
     active = fields.Boolean('Active', default=True)
     company_id = fields.Many2one('res.company', string='Company', index=True, default=lambda self: self.env.company)
-    parent_id = fields.Many2one('hr.department', string='Parent Department', index=True)
+    parent_id = fields.Many2one('hr.department', string='Parent Department', index=True, domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]")
     child_ids = fields.One2many('hr.department', 'parent_id', string='Child Departments')
-    manager_id = fields.Many2one('hr.employee', string='Manager', tracking=True)
+    manager_id = fields.Many2one('hr.employee', string='Manager', tracking=True, domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]")
     member_ids = fields.One2many('hr.employee', 'department_id', string='Members', readonly=True)
     jobs_ids = fields.One2many('hr.job', 'department_id', string='Jobs')
     note = fields.Text('Note')
     color = fields.Integer('Color Index')
 
-    @api.multi
     def name_get(self):
         if not self.env.context.get('hierarchical_naming', True):
             return [(record.id, record.name) for record in self]
@@ -54,7 +53,6 @@ class Department(models.Model):
             department.message_subscribe(partner_ids=manager.user_id.partner_id.ids)
         return department
 
-    @api.multi
     def write(self, vals):
         """ If updating manager of a department, we need to update all the employees
             of department hierarchy, and subscribe the new manager.

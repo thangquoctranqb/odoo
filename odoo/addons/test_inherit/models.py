@@ -55,8 +55,8 @@ class mother(models.Model):
 class mother(models.Model):
     _inherit = 'test.inherit.mother'
 
-    # extend again the selection of the state field
-    state = fields.Selection(selection_add=[('d', 'D')])
+    # extend again the selection of the state field: 'd' must precede 'b'
+    state = fields.Selection(selection_add=[('d', 'D'), ('b',)])
 
 
 class daughter(models.Model):
@@ -96,7 +96,6 @@ class test_inherit_property(models.Model):
     # override property_bar with a new-api computed field
     property_bar = fields.Integer(compute='_compute_bar', company_dependent=False)
 
-    @api.multi
     def _compute_bar(self):
         for record in self:
             record.property_bar = 42
@@ -137,3 +136,12 @@ class Parent2(models.AbstractModel):
     @api.constrains('foo')
     def _check_foo(self):
         pass
+
+
+#
+# Extend a selection field
+#
+class Selection(models.Model):
+    _inherit = 'test_new_api.selection'
+
+    state = fields.Selection(selection_add=[('bar', 'Bar'), ('baz', 'Baz')])

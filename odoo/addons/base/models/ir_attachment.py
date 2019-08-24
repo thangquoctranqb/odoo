@@ -36,7 +36,6 @@ class IrAttachment(models.Model):
     _description = 'Attachment'
     _order = 'id desc'
 
-    @api.depends('res_model', 'res_id')
     def _compute_res_name(self):
         for attachment in self:
             if attachment.res_model and attachment.res_id:
@@ -276,7 +275,7 @@ class IrAttachment(models.Model):
 
     name = fields.Char('Name', required=True)
     description = fields.Text('Description')
-    res_name = fields.Char('Resource Name', compute='_compute_res_name', store=True)
+    res_name = fields.Char('Resource Name', compute='_compute_res_name')
     res_model = fields.Char('Resource Model', readonly=True, help="The database object this attachment will be attached to.")
     res_field = fields.Char('Resource Field', readonly=True)
     res_id = fields.Integer('Resource ID', readonly=True, help="The record id this is attached to.")
@@ -323,7 +322,7 @@ class IrAttachment(models.Model):
     @api.model
     def check(self, mode, values=None):
         """Restricts the access to an ir.attachment, according to referred model
-        In the 'document' module, it is overriden to relax this hard rule, since
+        In the 'document' module, it is overridden to relax this hard rule, since
         more complex ones apply there.
         """
         if self.env.is_superuser():
@@ -332,6 +331,8 @@ class IrAttachment(models.Model):
         model_ids = defaultdict(set)            # {model_name: set(ids)}
         require_employee = False
         if self:
+            # DLE P173: `test_01_portal_attachment`
+            self.env['ir.attachment'].flush(['res_model', 'res_id', 'create_uid', 'public', 'res_field'])
             self._cr.execute('SELECT res_model, res_id, create_uid, public, res_field FROM ir_attachment WHERE id IN %s', [tuple(self.ids)])
             for res_model, res_id, create_uid, public, res_field in self._cr.fetchall():
                 if not self.env.is_system() and res_field:
@@ -372,7 +373,7 @@ class IrAttachment(models.Model):
                 raise AccessError(_("Sorry, you are not allowed to access this document."))
 
     def _read_group_allowed_fields(self):
-        return ['type', 'company_id', 'res_id', 'create_date', 'create_uid', 'res_name', 'name', 'mimetype', 'id', 'url', 'res_field', 'res_model']
+        return ['type', 'company_id', 'res_id', 'create_date', 'create_uid', 'name', 'mimetype', 'id', 'url', 'res_field', 'res_model']
 
     @api.model
     def read_group(self, domain, fields, groupby, offset=0, limit=None, orderby=False, lazy=True):
@@ -449,14 +450,22 @@ class IrAttachment(models.Model):
 
         # sort result according to the original sort ordering
         result = [id for id in orig_ids if id in ids]
+
+        # If the original search reached the limit, it is important the
+        # filtered record set does so too. When a JS view recieve a
+        # record set whose length is bellow the limit, it thinks it
+        # reached the last page.
+        if len(orig_ids) == limit and len(result) < len(orig_ids):
+            result.extend(self._search(args, offset=offset + len(orig_ids),
+                                       limit=limit, order=order, count=count,
+                                       access_rights_uid=access_rights_uid)[:limit - len(result)])
+
         return len(result) if count else list(result)
 
-    @api.multi
     def read(self, fields=None, load='_classic_read'):
         self.check('read')
         return super(IrAttachment, self).read(fields, load=load)
 
-    @api.multi
     def write(self, vals):
         self.check('write', values=vals)
         # remove computed field depending of datas
@@ -466,12 +475,10 @@ class IrAttachment(models.Model):
             vals = self._check_contents(vals)
         return super(IrAttachment, self).write(vals)
 
-    @api.multi
     def copy(self, default=None):
         self.check('write')
         return super(IrAttachment, self).copy(default)
 
-    @api.multi
     def unlink(self):
         if not self:
             return True
@@ -506,7 +513,6 @@ class IrAttachment(models.Model):
             self.check('write', values={'res_model':res_model, 'res_id':res_id})
         return super(IrAttachment, self).create(vals_list)
 
-    @api.multi
     def _post_add_create(self):
         pass
 

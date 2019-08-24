@@ -2,7 +2,6 @@ odoo.define('website_forum.website_forum', function (require) {
 'use strict';
 
 var core = require('web.core');
-var crash_manager = require('web.crash_manager');
 var Wysiwyg = require('web_editor.wysiwyg.root');
 var publicWidget = require('web.public.widget');
 var session = require('web.session');
@@ -18,9 +17,6 @@ publicWidget.registry.websiteForum = publicWidget.Widget.extend({
         'click .karma_required': '_onKarmaRequiredClick',
         'mouseenter .o_js_forum_tag_follow': '_onTagFollowBoxMouseEnter',
         'mouseleave .o_js_forum_tag_follow': '_onTagFollowBoxMouseLeave',
-        'click .o_forum_profile_pic_edit': '_onEditProfilePicClick',
-        'change .o_forum_file_upload': '_onFileUploadChange',
-        'click .o_forum_profile_pic_clear': '_onProfilePicClearClick',
         'mouseenter .o_forum_user_info': '_onUserInfoMouseEnter',
         'mouseleave .o_forum_user_info': '_onUserInfoMouseLeave',
         'mouseleave .o_forum_user_bio_expand': '_onUserBioExpandMouseLeave',
@@ -28,6 +24,9 @@ publicWidget.registry.websiteForum = publicWidget.Widget.extend({
         'click .vote_up:not(.karma_required), .vote_down:not(.karma_required)': '_onVotePostClick',
         'click .o_js_validation_queue a[href*="/validate"]': '_onValidationQueueClick',
         'click .accept_answer:not(.karma_required)': '_onAcceptAnswerClick',
+        'click .validate_answer [data-href]': '_onAcceptAnswerClick',
+        'mouseenter .validate_answer [data-href]': '_onRemoveValidAnswerMouse',
+        'mouseleave .validate_answer [data-href]': '_onRemoveValidAnswerMouse',
         'click .favourite_question': '_onFavoriteQuestionClick',
         'click .comment_delete': '_onDeleteCommentClick',
         'click .js_close_intro': '_onCloseIntroClick',
@@ -151,7 +150,7 @@ publicWidget.registry.websiteForum = publicWidget.Widget.extend({
             wysiwyg.attachTo($textarea).then(function () {
                 // float-left class messes up the post layout OPW 769721
                 $form.find('.note-editable').find('img.float-left').removeClass('float-left');
-                $form.on('click', 'button, .a-submit', function () {
+                $form.on('click', 'button .a-submit', function () {
                     $form.find('textarea').data('wysiwyg').save();
                 });
             });
@@ -193,7 +192,7 @@ publicWidget.registry.websiteForum = publicWidget.Widget.extend({
             msg = _t("Sorry you must be logged in to perform this action");
             title = _t("Access Denied");
         }
-        crash_manager.show_warning({
+        this.call('crash_manager', 'show_warning', {
             message: msg,
             title: title,
         }, {
@@ -213,41 +212,6 @@ publicWidget.registry.websiteForum = publicWidget.Widget.extend({
      */
     _onTagFollowBoxMouseLeave: function (ev) {
         $(ev.currentTarget).find('.o_forum_tag_follow_box').stop().fadeOut().css('display', 'none');
-    },
-    /**
-     * @private
-     * @param {Event} ev
-     */
-    _onEditProfilePicClick: function (ev) {
-        ev.preventDefault();
-        $(ev.currentTarget).closest('form').find('.o_forum_file_upload').trigger('click');
-    },
-    /**
-     * @private
-     * @param {Event} ev
-     */
-    _onFileUploadChange: function (ev) {
-        if (!ev.currentTarget.files.length) {
-            return;
-        }
-        var $form = $(ev.currentTarget).closest('form');
-        utils.getDataURLFromFile(ev.currentTarget.files[0]).then(function (result) {
-            $form.find('.o_forum_avatar_img').attr('src', result);
-        });
-        $form.find('#forum_clear_image').remove();
-    },
-    /**
-     * @private
-     * @param {Event} ev
-     */
-    _onProfilePicClearClick: function (ev) {
-        var $form = $(ev.currentTarget).closest('form');
-        $form.find('.o_forum_avatar_img').attr('src', '/web/static/src/img/placeholder.png');
-        $form.append($('<input/>', {
-            name: 'clear_image',
-            id: 'forum_clear_image',
-            type: 'hidden',
-        }));
     },
     /**
      * @private
@@ -275,6 +239,7 @@ publicWidget.registry.websiteForum = publicWidget.Widget.extend({
      * @param {Event} ev
      */
     _onFlagAlertClick: function (ev) {
+        var self = this;
         ev.preventDefault();
         var $link = $(ev.currentTarget);
         this._rpc({
@@ -289,7 +254,7 @@ publicWidget.registry.websiteForum = publicWidget.Widget.extend({
                 } else if (data.error === 'post_non_flaggable') {
                     message = _t("This post can not be flagged");
                 }
-                crash_manager.show_warning({
+                self.call('crash_manager', 'show_warning', {
                     message: message,
                     title: _t("Access Denied"),
                 }, {
@@ -316,6 +281,7 @@ publicWidget.registry.websiteForum = publicWidget.Widget.extend({
      * @param {Event} ev
      */
     _onVotePostClick: function (ev) {
+        var self = this;
         ev.preventDefault();
         var $link = $(ev.currentTarget);
         this._rpc({
@@ -328,7 +294,7 @@ publicWidget.registry.websiteForum = publicWidget.Widget.extend({
                 } else if (data.error === 'anonymous_user') {
                     message = _t('Sorry you must be logged to vote');
                 }
-                crash_manager.show_warning({
+                self.call('crash_manager', 'show_warning', {
                     message: message,
                     title: _t("Access Denied"),
                 }, {
@@ -372,7 +338,10 @@ publicWidget.registry.websiteForum = publicWidget.Widget.extend({
      * @param {Event} ev
      */
     _onAcceptAnswerClick: function (ev) {
+        var self = this;
         ev.preventDefault();
+        var self = this;
+        var $acceptAnswerLinks = this.$('.accept_answer');
         var $link = $(ev.currentTarget);
         this._rpc({
             route: $link.data('href'),
@@ -381,26 +350,48 @@ publicWidget.registry.websiteForum = publicWidget.Widget.extend({
                 if (data.error === 'anonymous_user') {
                     var message = _t("Sorry, anonymous users cannot choose correct answer.");
                 }
-                crash_manager.show_warning({
+                self.call('crash_manager', 'show_warning', {
                     message: message,
                     title: _t("Access Denied"),
                 }, {
                     sticky: false,
                 });
             } else {
+                $acceptAnswerLinks.removeClass('oe_answer_true')
+                                  .addClass('oe_answer_false');
                 $link.toggleClass('oe_answer_true', !!data)
                      .toggleClass('oe_answer_false', !data);
+
+                // TODO in master, review the utility of this function...
+                self._onCheckAnswerStatus(ev);
+
+                // If we are removing an accepted answer, reload the page as the
+                // design is quite different with or without an accepted answer.
+                if ($link.closest('.validate_answer').length) {
+                    window.location.reload();
+                }
             }
         });
-        this._onCheckAnswerStatus(ev);
+    },
+    /**
+     * @private
+     * @param {Event} ev
+     */
+    _onRemoveValidAnswerMouse: function (ev) {
+        var hover = (ev.type === 'mouseenter');
+        $(ev.currentTarget).find('.fa')
+            .toggleClass('fa-times-circle text-danger', hover)
+            .toggleClass('fa-check-circle text-success', !hover);
     },
     /**
      * @private
      * @param {Event} ev
      */
     _onCheckAnswerStatus: function (ev) {
-        var $link = $(ev.currentTarget);
-        $link.toggleClass('text-success', !$link.hasClass('oe_answer_true'));
+        _.each(this.$('.accept_answer'), function (link) {
+            var $link = $(link);
+            $link.toggleClass('text-success', $link.hasClass('oe_answer_true'));
+        });
     },
     /**
      * @private

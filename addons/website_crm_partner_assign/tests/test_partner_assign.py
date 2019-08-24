@@ -29,7 +29,7 @@ class TestPartnerAssign(TransactionCase):
             'partner_id': self.customer_uk.id
         })
 
-        def geo_find(addr):
+        def geo_find(addr, **kw):
             return {
                 'Wavre, Belgium': (50.7158956, 4.6128075),
                 'Cannon Hill Park, B46 3AG Birmingham, United Kingdom': (52.45216, -1.898578),
@@ -118,6 +118,7 @@ class TestPartnerLeadPortal(TestCrmCases):
         # Sales Team of crm_salesman
         self.team = self.env['crm.team'].with_context(mail_notrack=True).create({
             'name': 'Test Team FOR THE WIN',
+            'use_leads': True,
             'member_ids': [(6, 0, [self.crm_salesman.id])],
         })
 

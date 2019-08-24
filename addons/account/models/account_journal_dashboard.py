@@ -25,6 +25,8 @@ class account_journal(models.Model):
                 journal.kanban_dashboard_graph = json.dumps(journal.get_bar_graph_datas())
             elif (journal.type in ['cash', 'bank']):
                 journal.kanban_dashboard_graph = json.dumps(journal.get_line_graph_datas())
+            else:
+                journal.kanban_dashboard_graph = False
 
     def _get_json_activity_data(self):
         for journal in self:
@@ -73,7 +75,6 @@ class account_journal(models.Model):
             return ['', _('Bank: Balance')]
 
     # Below method is used to get data of bank and cash statemens
-    @api.multi
     def get_line_graph_datas(self):
         """Computes the data used to display the graph for bank and cash journals in the accounting dashboard"""
 
@@ -133,18 +134,17 @@ class account_journal(models.Model):
 
         return [{'values': data, 'title': graph_title, 'key': graph_key, 'area': True, 'color': color, 'is_sample_data': is_sample_data}]
 
-    @api.multi
     def get_bar_graph_datas(self):
         data = []
         today = fields.Datetime.now(self)
-        data.append({'label': _('Past'), 'value':0.0, 'type': 'past'})
+        data.append({'label': _('Due'), 'value':0.0, 'type': 'past'})
         day_of_week = int(format_datetime(today, 'e', locale=self._context.get('lang') or 'en_US'))
         first_day_of_week = today + timedelta(days=-day_of_week+1)
         for i in range(-1,4):
             if i==0:
                 label = _('This Week')
             elif i==3:
-                label = _('Future')
+                label = _('Not Due')
             else:
                 start_week = first_day_of_week + timedelta(days=i*7)
                 end_week = start_week + timedelta(days=6)
@@ -194,18 +194,21 @@ class account_journal(models.Model):
         for it as its second.
         """
         return ('''
-            SELECT 
-                SUM((CASE WHEN move.type IN ('out_refund', 'in_refund') THEN -1 else 1 END) * line.amount_residual) AS total,
+            SELECT
+                SUM((CASE WHEN move.type IN %(purchase_types)s THEN -1 else 1 END) * line.amount_residual) AS total,
                 MIN(invoice_date_due) AS aggr_date
             FROM account_move_line line
             JOIN account_move move ON move.id = line.move_id
             WHERE move.journal_id = %(journal_id)s
             AND move.state = 'posted'
             AND move.invoice_payment_state = 'not_paid'
-            AND move.type IN ('out_invoice', 'out_refund', 'in_invoice', 'in_refund', 'out_receipt', 'in_receipt')
-        ''', {'journal_id': self.id})
+            AND move.type IN %(invoice_types)s
+        ''', {
+            'purchase_types': tuple(self.env['account.move'].get_purchase_types(True)),
+            'invoice_types': tuple(self.env['account.move'].get_invoice_types(True)),
+            'journal_id': self.id
+        })
 
-    @api.multi
     def get_journal_dashboard_datas(self):
         currency = self.currency_id or self.company_id.currency_id
         number_to_reconcile = number_to_check = last_balance = account_sum = 0
@@ -242,6 +245,7 @@ class account_journal(models.Model):
         #TODO need to check if all invoices are in the same currency than the journal!!!!
         elif self.type in ['sale', 'purchase']:
             title = _('Bills to pay') if self.type == 'purchase' else _('Invoices owed to you')
+            self.env['account.move'].flush(['amount_residual', 'currency_id', 'type', 'invoice_date', 'company_id', 'journal_id', 'date', 'state', 'invoice_payment_state'])
 
             (query, query_args) = self._get_open_bills_to_pay_query()
             self.env.cr.execute(query, query_args)
@@ -253,15 +257,15 @@ class account_journal(models.Model):
 
             today = fields.Date.today()
             query = '''
-                SELECT 
-                    (CASE WHEN type IN ('out_refund', 'in_refund') THEN -1 ELSE 1 END) * amount_residual AS amount_total, 
+                SELECT
+                    (CASE WHEN type IN ('out_refund', 'in_refund') THEN -1 ELSE 1 END) * amount_residual AS amount_total,
                     currency_id AS currency,
-                    type, 
-                    invoice_date, 
+                    type,
+                    invoice_date,
                     company_id
                 FROM account_move move
-                WHERE journal_id = %s 
-                AND date <= %s 
+                WHERE journal_id = %s
+                AND date <= %s
                 AND state = 'posted'
                 AND invoice_payment_state = 'not_paid'
                 AND type IN ('out_invoice', 'out_refund', 'in_invoice', 'in_refund', 'out_receipt', 'in_receipt');
@@ -307,14 +311,14 @@ class account_journal(models.Model):
         it as its second.
         """
         return ('''
-            SELECT 
-                (CASE WHEN move.type IN ('out_refund', 'in_refund') THEN -1 ELSE 1 END) * move.amount_residual AS amount_total, 
-                move.currency_id AS currency, 
-                move.type, 
-                move.invoice_date, 
+            SELECT
+                (CASE WHEN move.type IN ('out_refund', 'in_refund') THEN -1 ELSE 1 END) * move.amount_residual AS amount_total,
+                move.currency_id AS currency,
+                move.type,
+                move.invoice_date,
                 move.company_id
             FROM account_move move
-            WHERE move.journal_id = %(journal_id)s 
+            WHERE move.journal_id = %(journal_id)s
             AND move.state = 'posted'
             AND move.invoice_payment_state = 'not_paid'
             AND move.type IN ('out_invoice', 'out_refund', 'in_invoice', 'in_refund', 'out_receipt', 'in_receipt');
@@ -327,14 +331,14 @@ class account_journal(models.Model):
         dictionary to use to run it as its second.
         """
         return ('''
-            SELECT 
-                (CASE WHEN move.type IN ('out_refund', 'in_refund') THEN -1 ELSE 1 END) * move.amount_total AS amount_total, 
-                move.currency_id AS currency, 
-                move.type, 
-                move.invoice_date, 
+            SELECT
+                (CASE WHEN move.type IN ('out_refund', 'in_refund') THEN -1 ELSE 1 END) * move.amount_total AS amount_total,
+                move.currency_id AS currency,
+                move.type,
+                move.invoice_date,
                 move.company_id
             FROM account_move move
-            WHERE move.journal_id = %(journal_id)s 
+            WHERE move.journal_id = %(journal_id)s
             AND move.state = 'draft'
             AND move.invoice_payment_state = 'not_paid'
             AND move.type IN ('out_invoice', 'out_refund', 'in_invoice', 'in_refund', 'out_receipt', 'in_receipt');
@@ -368,7 +372,6 @@ class account_journal(models.Model):
             rslt_sum += target_currency.round(amount)
         return (rslt_count, rslt_sum)
 
-    @api.multi
     def action_create_new(self):
         ctx = self._context.copy()
         ctx['default_journal_id'] = self.id
@@ -388,19 +391,29 @@ class account_journal(models.Model):
             'context': ctx,
         }
 
-    @api.multi
     def create_cash_statement(self):
         ctx = self._context.copy()
         ctx.update({'journal_id': self.id, 'default_journal_id': self.id, 'default_journal_type': 'cash'})
-        return {
+        open_statements = self.env['account.bank.statement'].search([('journal_id', '=', self.id), ('state', '=', 'open')])
+        action = {
             'name': _('Create cash statement'),
             'type': 'ir.actions.act_window',
             'view_mode': 'form',
             'res_model': 'account.bank.statement',
             'context': ctx,
         }
+        if len(open_statements) == 1:
+            action.update({
+                'view_mode': 'form',
+                'res_id': open_statements.id,
+            })
+        elif len(open_statements) > 1:
+            action.update({
+                'view_mode': 'tree,form',
+                'domain': [('id', 'in', open_statements.ids)],
+            })
+        return action
 
-    @api.multi
     def action_open_reconcile(self):
         if self.type in ['bank', 'cash']:
             # Open reconciliation view for bank statements belonging to this journal
@@ -423,7 +436,6 @@ class account_journal(models.Model):
                 'context': action_context,
             }
 
-    @api.multi
     def action_open_to_check(self):
         self.ensure_one()
         ids = self.to_check_ids().ids
@@ -443,7 +455,6 @@ class account_journal(models.Model):
         statement_line_ids = self.env['account.move.line'].search(domain).mapped('statement_line_id')
         return statement_line_ids
 
-    @api.multi
     def open_action(self):
         """return action based on type for related journals"""
         action_name = self._context.get('action_name')
@@ -484,19 +495,15 @@ class account_journal(models.Model):
 
         return action
 
-    @api.multi
     def open_spend_money(self):
         return self.open_payments_action('outbound')
 
-    @api.multi
     def open_collect_money(self):
         return self.open_payments_action('inbound')
 
-    @api.multi
     def open_transfer_money(self):
         return self.open_payments_action('transfer')
 
-    @api.multi
     def open_payments_action(self, payment_type, mode='tree'):
         if payment_type == 'outbound':
             action_ref = 'account.action_account_payments_payable'
@@ -510,7 +517,6 @@ class account_journal(models.Model):
             action['views'] = [[False, 'form']]
         return action
 
-    @api.multi
     def open_action_with_context(self):
         action_name = self.env.context.get('action_name', False)
         if not action_name:
@@ -528,7 +534,6 @@ class account_journal(models.Model):
             action['name'] += ' for journal ' + self.name
         return action
 
-    @api.multi
     def create_bank_statement(self):
         """return action to create a bank statements. This button should be called only on journals with type =='bank'"""
         action = self.env.ref('account.action_bank_statement_tree').read()[0]
@@ -538,17 +543,14 @@ class account_journal(models.Model):
         })
         return action
 
-    @api.multi
     def create_customer_payment(self):
         """return action to create a customer payment"""
         return self.open_payments_action('inbound', mode='form')
 
-    @api.multi
     def create_supplier_payment(self):
         """return action to create a supplier payment"""
         return self.open_payments_action('outbound', mode='form')
 
-    @api.multi
     def create_internal_transfer(self):
         """return action to create a internal transfer"""
         return self.open_payments_action('transfer', mode='form')

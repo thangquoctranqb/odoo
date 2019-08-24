@@ -11,11 +11,9 @@ class ResConfigSettings(models.TransientModel):
     crm_alias_prefix = fields.Char('Default Alias Name for Leads')
     generate_lead_from_alias = fields.Boolean('Manual Assignation of Emails', config_parameter='crm.generate_lead_from_alias')
     group_use_lead = fields.Boolean(string="Leads", implied_group='crm.group_use_lead')
-    module_crm_phone_validation = fields.Boolean("Phone Formatting")
     module_crm_iap_lead = fields.Boolean("Generate new leads based on their country, industries, size, etc.")
     module_crm_iap_lead_website = fields.Boolean("Create Leads/Opportunities from your website's traffic")
     lead_mining_in_pipeline = fields.Boolean("Create a lead mining request directly from the opportunity pipeline.", config_parameter='crm.lead_mining_in_pipeline')
-    crm_phone_valid_method = fields.Selection(related="company_id.phone_international_format", required=True, readonly=False)
     predictive_lead_scoring_start_date = fields.Date(string='Lead Scoring Starting Date', compute="_compute_pls_start_date", inverse="_inverse_pls_start_date_str")
     predictive_lead_scoring_start_date_str = fields.Char(string='Lead Scoring Starting Date in String', default=date.today().strftime('%Y-%m-%d'), config_parameter='crm.pls_start_date')
     predictive_lead_scoring_fields = fields.Many2many('crm.lead.scoring.frequency.field', string='Lead Scoring Frequency Fields', compute="_compute_pls_fields", inverse="_inverse_pls_fields_str")
@@ -50,6 +48,8 @@ class ResConfigSettings(models.TransientModel):
         for setting in self:
             if setting.predictive_lead_scoring_fields:
                 setting.predictive_lead_scoring_fields_str = ','.join(setting.predictive_lead_scoring_fields.mapped('name'))
+            else:
+                setting.predictive_lead_scoring_fields_str = ''
 
     @api.depends('predictive_lead_scoring_start_date_str')
     def _compute_pls_start_date(self):
@@ -84,7 +84,6 @@ class ResConfigSettings(models.TransientModel):
         )
         return res
 
-    @api.multi
     def set_values(self):
         super(ResConfigSettings, self).set_values()
         alias = self._find_default_lead_alias_id()

@@ -17,7 +17,7 @@ try:
         try:
             phone_nbr = phonenumbers.parse(number, region=country_code, keep_raw_input=True)
         except phonenumbers.phonenumberutil.NumberParseException as e:
-            raise UserError(_('Unable to parse %s:\n%s') % (number, e))
+            raise UserError(_('Unable to parse %s: %s') % (number, str(e)))
 
         if not phonenumbers.is_possible_number(phone_nbr):
             raise UserError(_('Impossible number %s: probably invalid number of digits') % number)
@@ -77,53 +77,41 @@ except ImportError:
 
 
 def phone_sanitize_numbers(numbers, country_code, country_phone_code, force_format='E164'):
-    valid, invalid, void_count = [], [], 0
+    """ Given a list of numbers, return parsezd and sanitized information
+
+    :return dict: {number: {
+        'sanitized': sanitized and formated number or False (if cannot format)
+        'code': 'empty' (number was a void string), 'invalid' (error) or False (sanitize ok)
+        'msg': error message when 'invalid'
+    }}
+    """
+    if not isinstance(numbers, (list)):
+        raise NotImplementedError()
+    result = dict.fromkeys(numbers, False)
     for number in numbers:
         if not number:
-            void_count += 1
+            result[number] = {'sanitized': False, 'code': 'empty', 'msg': False}
             continue
         try:
+            stripped = number.strip()
             sanitized = phone_format(
-                number, country_code, country_phone_code,
+                stripped, country_code, country_phone_code,
                 force_format=force_format, raise_exception=True)
         except Exception as e:
-            invalid.append(number)
+            result[number] = {'sanitized': False, 'code': 'invalid', 'msg': str(e)}
         else:
-            valid.append(sanitized)
-    return valid, invalid, void_count
+            result[number] = {'sanitized': sanitized, 'code': False, 'msg': False}
+    return result
 
 
-def phone_sanitize_numbers_w_record(numbers, country_code, country_phone_code, record, record_country_fname='country_id', force_format='E164'):
-    if not country_code or not country_phone_code:
-        country = False
-        if record and record_country_fname in record and record[record_country_fname]:
+def phone_sanitize_numbers_w_record(numbers, record, country=False, record_country_fname='country_id', force_format='E164'):
+    if not isinstance(numbers, (list)):
+        raise NotImplementedError()
+    if not country:
+        if record and record_country_fname and hasattr(record, record_country_fname) and record[record_country_fname]:
             country = record[record_country_fname]
         elif record:
             country = record.env.company.country_id
-        if country:
-            country_code = country_code if country_code else country.code
-            country_phone_code = country_phone_code if country_phone_code else country.phone_code
+    country_code = country.code if country else None
+    country_phone_code = country.phone_code if country else None
     return phone_sanitize_numbers(numbers, country_code, country_phone_code, force_format=force_format)
-
-
-def phone_sanitize_numbers_string_w_record(numbers_str, country_code, country_phone_code, record, record_country_fname='country_id', force_format='E164'):
-    found_numbers = [number.strip() for number in numbers_str.split(',')]
-    return phone_sanitize_numbers_w_record(found_numbers, country_code, country_phone_code, record, record_country_fname, force_format=force_format)
-
-
-def phone_get_sanitized_records_number(records, number_fname='mobile', country_fname='country_id', force_format='E164'):
-    res = dict.fromkeys(records.ids, False)
-    for record in records:
-        number = record[number_fname]
-        valid, invalid, void_count = phone_sanitize_numbers_w_record([number], None, None, records, country_fname,force_format=force_format)
-        if valid:
-            res[record.id] = valid[0]
-        elif void_count:
-            res[record.id] = False
-        else:
-            res[record.id] = False
-    return res
-
-
-def phone_get_sanitized_record_number(record, number_fname='mobile', country_fname='country_id', force_format='E164'):
-    return phone_get_sanitized_records_number(record, number_fname, country_fname, force_format=force_format)[record.id]

@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # Part of Odoo. See LICENSE file for full copyright and licensing details.
 
-from datetime import datetime, time
+from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-from odoo import fields
+from odoo import fields, SUPERUSER_ID
 
-from odoo.tests import common
+from odoo.tests import common, new_test_user
 from odoo.addons.hr_timesheet.tests.test_timesheet import TestCommonTimesheet
 
 
@@ -23,6 +23,17 @@ class TestTimesheetHolidaysCreate(common.TransactionCase):
         self.assertEqual(status.timesheet_project_id, company.leave_timesheet_project_id, 'The default project linked to the status should be the same as the company')
         self.assertEqual(status.timesheet_task_id, company.leave_timesheet_task_id, 'The default task linked to the status should be the same as the company')
 
+    def test_company_create(self):
+        main_company = self.env.ref('base.main_company')
+        user = new_test_user(self.env, login='fru',
+                             groups='base.group_user,base.group_erp_manager,base.group_partner_manager',
+                             company_id=main_company.id,
+                             company_ids=[(6, 0, main_company.ids)])
+        Company = self.env['res.company']
+        Company = Company.with_user(user)
+        Company = Company.with_context(allowed_company_ids=main_company.ids)
+        company = Company.create({'name': "Wall Company"})
+        self.assertEqual(company.leave_timesheet_project_id.sudo().company_id, company, "It should have created a project for the company")
 
 class TestTimesheetHolidays(TestCommonTimesheet):
 
@@ -86,11 +97,11 @@ class TestTimesheetHolidays(TestCommonTimesheet):
             'date_to': self.leave_end_datetime,
             'number_of_days': number_of_days,
         })
-        holiday.sudo().action_validate()
+        holiday.with_user(SUPERUSER_ID).action_validate()
         self.assertEquals(len(holiday.timesheet_ids), number_of_days, 'Number of generated timesheets should be the same as the leave duration (1 per day between %s and %s)' % (fields.Datetime.to_string(self.leave_start_datetime), fields.Datetime.to_string(self.leave_end_datetime)))
 
         # manager refuse the leave
-        holiday.sudo().action_refuse()
+        holiday.with_user(SUPERUSER_ID).action_refuse()
         self.assertEquals(len(holiday.timesheet_ids), 0, 'Number of linked timesheets should be zero, since the leave is refused.')
 
     def test_validate_without_timesheet(self):
@@ -104,5 +115,5 @@ class TestTimesheetHolidays(TestCommonTimesheet):
             'date_to': self.leave_end_datetime,
             'number_of_days': number_of_days,
         })
-        holiday.sudo().action_validate()
+        holiday.with_user(SUPERUSER_ID).action_validate()
         self.assertEquals(len(holiday.timesheet_ids), 0, 'Number of generated timesheets should be zero since the leave type does not generate timesheet')

@@ -20,6 +20,7 @@ class Page(models.Model):
     menu_ids = fields.One2many('website.menu', 'page_id', 'Related Menus')
     is_homepage = fields.Boolean(compute='_compute_homepage', inverse='_set_homepage', string='Homepage')
     is_visible = fields.Boolean(compute='_compute_visible', string='Is Visible')
+    is_tracked = fields.Boolean(string='Is Tracked', default=False, help="A tracked page will be included in visitors browsing history.")
 
     # Page options
     header_overlay = fields.Boolean()
@@ -27,6 +28,7 @@ class Page(models.Model):
 
     # don't use mixin website_id but use website_id on ir.ui.view instead
     website_id = fields.Many2one(related='view_id.website_id', store=True, readonly=False)
+    arch = fields.Text(related='view_id.arch', readonly=False, depends_context=('website_id',))
 
     def _compute_homepage(self):
         for page in self:
@@ -48,7 +50,6 @@ class Page(models.Model):
                 not page.date_publish or page.date_publish < fields.Datetime.now()
             )
 
-    @api.multi
     def _is_most_specific_page(self, page_to_test):
         '''This will test if page_to_test is the most specific page in self.'''
         pages_for_url = self.sorted(key=lambda p: not p.website_id).filtered(lambda page: page.url == page_to_test.url)
@@ -64,7 +65,6 @@ class Page(models.Model):
             ['id', 'name', 'url', 'website_published', 'website_indexed', 'date_publish', 'menu_ids', 'is_homepage', 'website_id'],
         )
 
-    @api.multi
     def get_view_identifier(self):
         """ Get identifier of this page view that may be used to render it """
         return self.view_id.id
@@ -132,7 +132,6 @@ class Page(models.Model):
 
         return url
 
-    @api.multi
     @api.returns('self', lambda value: value.id)
     def copy(self, default=None):
         if default:
@@ -161,7 +160,6 @@ class Page(models.Model):
 
         return new_page.url + '?enable_editor=1'
 
-    @api.multi
     def unlink(self):
         # When a website_page is deleted, the ORM does not delete its
         # ir_ui_view. So we got to delete it ourself, but only if the
@@ -176,7 +174,6 @@ class Page(models.Model):
                 page.view_id.unlink()
         return super(Page, self).unlink()
 
-    @api.multi
     def write(self, vals):
         if 'url' in vals and not vals['url'].startswith('/'):
             vals['url'] = '/' + vals['url']

@@ -15,27 +15,24 @@ class AccountMoveLine(models.Model):
         'invoice_line_id', 'order_line_id',
         string='Sales Order Lines', readonly=True, copy=False)
 
-    @api.multi
     def _copy_data_extend_business_fields(self, values):
         # OVERRIDE to copy the 'sale_line_ids' field as well.
         super(AccountMoveLine, self)._copy_data_extend_business_fields(values)
         values['sale_line_ids'] = [(6, None, self.sale_line_ids.ids)]
 
-    @api.multi
     def _prepare_analytic_line(self):
         """ Note: This method is called only on the move.line that having an analytic account, and
             so that should create analytic entries.
         """
         values_list = super(AccountMoveLine, self)._prepare_analytic_line()
 
-        uom_precision_digits = self.env['decimal.precision'].precision_get('Product Unit of Measure')
-
         # filter the move lines that can be reinvoiced: a cost (negative amount) analytic line without SO line but with a product can be reinvoiced
         move_to_reinvoice = self.env['account.move.line']
         for index, move_line in enumerate(self):
             values = values_list[index]
-            if 'so_line' not in values and float_compare(move_line.credit or 0.0, move_line.debit or 0.0, precision_digits=uom_precision_digits) != 1 and move_line.product_id.expense_policy not in [False, 'no']:
-                move_to_reinvoice |= move_line
+            if 'so_line' not in values:
+                if move_line._sale_can_be_reinvoice():
+                    move_to_reinvoice |= move_line
 
         # insert the sale line in the create values of the analytic entries
         if move_to_reinvoice:
@@ -48,7 +45,14 @@ class AccountMoveLine(models.Model):
 
         return values_list
 
-    @api.multi
+    def _sale_can_be_reinvoice(self):
+        """ determine if the generated analytic line should be reinvoiced or not.
+            For Vendor Bill flow, if the product has a 'erinvoice policy' and is a cost, then we will find the SO on which reinvoice the AAL
+        """
+        self.ensure_one()
+        uom_precision_digits = self.env['decimal.precision'].precision_get('Product Unit of Measure')
+        return float_compare(self.credit or 0.0, self.debit or 0.0, precision_digits=uom_precision_digits) != 1 and self.product_id.expense_policy not in [False, 'no']
+
     def _sale_create_reinvoice_sale_line(self):
 
         sale_order_map = self._sale_determine_order()
@@ -122,7 +126,6 @@ class AccountMoveLine(models.Model):
                 result[move_line_id] = unknown_sale_line
         return result
 
-    @api.multi
     def _sale_determine_order(self):
         """ Get the mapping of move.line with the sale.order record on which its analytic entries should be reinvoiced
             :return a dict where key is the move line id, and value is sale.order record (or None).
@@ -145,7 +148,6 @@ class AccountMoveLine(models.Model):
         # map of AAL index with the SO on which it needs to be reinvoiced. Maybe be None if no SO found
         return {move_line.id: mapping.get(move_line.analytic_account_id.id) for move_line in self}
 
-    @api.multi
     def _sale_prepare_sale_line_values(self, order, price):
         """ Generate the sale.line creation value from the current move line """
         self.ensure_one()
@@ -168,7 +170,6 @@ class AccountMoveLine(models.Model):
             'is_expense': True,
         }
 
-    @api.multi
     def _sale_get_invoice_price(self, order):
         """ Based on the current move line, compute the price to reinvoice the analytic line that is going to be created (so the
             price of the sale line).

@@ -41,8 +41,10 @@ class ResCompany(models.Model):
         domain=lambda self: [('reconcile', '=', True), ('user_type_id.id', '=', self.env.ref('account.data_account_type_current_assets').id), ('deprecated', '=', False)], string="Inter-Banks Transfer Account", help="Intermediary account used when moving money from a liquidity account to another")
     expects_chart_of_accounts = fields.Boolean(string='Expects a Chart of Accounts', default=True)
     chart_template_id = fields.Many2one('account.chart.template', help='The chart template for the company (if any)')
-    bank_account_code_prefix = fields.Char(string='Prefix of the bank accounts', oldname="bank_account_code_char")
+    bank_account_code_prefix = fields.Char(string='Prefix of the bank accounts')
     cash_account_code_prefix = fields.Char(string='Prefix of the cash accounts')
+    default_cash_difference_income_account_id = fields.Many2one('account.account', string="Cash Difference Income Account")
+    default_cash_difference_expense_account_id = fields.Many2one('account.account', string="Cash Difference Expense Account")
     transfer_account_code_prefix = fields.Char(string='Prefix of the transfer accounts')
     account_sale_tax_id = fields.Many2one('account.tax', string="Default Sale Tax")
     account_purchase_tax_id = fields.Many2one('account.tax', string="Default Purchase Tax")
@@ -57,8 +59,8 @@ class ResCompany(models.Model):
     expense_currency_exchange_account_id = fields.Many2one('account.account', related='currency_exchange_journal_id.default_debit_account_id', readonly=False,
         string="Loss Exchange Rate Account", domain="[('internal_type', '=', 'other'), ('deprecated', '=', False), ('company_id', '=', id)]")
     anglo_saxon_accounting = fields.Boolean(string="Use anglo-saxon accounting")
-    property_stock_account_input_categ_id = fields.Many2one('account.account', string="Input Account for Stock Valuation", oldname="property_stock_account_input_categ")
-    property_stock_account_output_categ_id = fields.Many2one('account.account', string="Output Account for Stock Valuation", oldname="property_stock_account_output_categ")
+    property_stock_account_input_categ_id = fields.Many2one('account.account', string="Input Account for Stock Valuation")
+    property_stock_account_output_categ_id = fields.Many2one('account.account', string="Output Account for Stock Valuation")
     property_stock_valuation_account_id = fields.Many2one('account.account', string="Account Template for Stock Valuation")
     bank_journal_ids = fields.One2many('account.journal', 'company_id', domain=[('type', '=', 'bank')], string='Bank Journals')
     overdue_msg = fields.Text(string='Overdue Payments Message', translate=True,
@@ -101,6 +103,9 @@ Best Regards,'''))
     account_invoice_onboarding_state = fields.Selection([('not_done', "Not done"), ('just_done', "Just done"), ('done', "Done"), ('closed', "Closed")], string="State of the account invoice onboarding panel", default='not_done')
     account_dashboard_onboarding_state = fields.Selection([('not_done', "Not done"), ('just_done', "Just done"), ('done', "Done"), ('closed', "Closed")], string="State of the account dashboard onboarding panel", default='not_done')
     invoice_terms = fields.Text(string='Default Terms and Conditions', translate=True)
+
+    # Needed in the Point of Sale
+    account_default_pos_receivable_account_id = fields.Many2one('account.account', string="Default PoS Receivable Account")
 
     @api.constrains('account_opening_move_id', 'fiscalyear_last_day', 'fiscalyear_last_month')
     def _check_fiscalyear_last_day(self):
@@ -145,7 +150,6 @@ Best Regards,'''))
             'account_setup_coa_state',
         ])
 
-    @api.multi
     def _check_lock_dates(self, vals):
         '''Check the lock dates for the current companies. This can't be done in a api.constrains because we need
         to perform some comparison between new/old values. This method forces the lock dates to be irreversible.
@@ -199,7 +203,6 @@ Best Regards,'''))
             if period_lock_date < fiscalyear_lock_date:
                 raise ValidationError(_('You cannot define stricter conditions on advisors than on users. Please make sure that the lock date on advisor is set before the lock date for users.'))
 
-    @api.multi
     def compute_fiscalyear_dates(self, current_date):
         '''Computes the start and end dates of the fiscal year where the given 'date' belongs to.
 
@@ -266,7 +269,6 @@ Best Regards,'''))
             if account.code.startswith(old_code):
                 account.write({'code': self.get_new_account_code(account.code, old_code, new_code)})
 
-    @api.multi
     def _validate_fiscalyear_lock(self, values):
         if values.get('fiscalyear_lock_date'):
             nb_draft_entries = self.env['account.move'].search([
@@ -276,7 +278,6 @@ Best Regards,'''))
             if nb_draft_entries:
                 raise ValidationError(_('There are still unposted entries in the period you want to lock. You should either post or delete them.'))
 
-    @api.multi
     def write(self, values):
         #restrict the closing of FY if there are still unposted entries
         self._validate_fiscalyear_lock(values)
@@ -319,7 +320,7 @@ Best Regards,'''))
 
         return {
             'type': 'ir.actions.act_window',
-            'name': _('Fiscal Year'),
+            'name': _('Accounting Periods'),
             'view_mode': 'form',
             'res_model': 'account.financial.year.op',
             'target': 'new',
@@ -462,13 +463,6 @@ Best Regards,'''))
         self.env.company.account_dashboard_onboarding_state = 'closed'
 
     @api.model
-    def action_open_account_onboarding_invoice_layout(self):
-        """ Onboarding step for the invoice layout. """
-        action = self.env.ref('account.action_open_account_onboarding_invoice_layout').read()[0]
-        action['res_id'] = self.env.company.id
-        return action
-
-    @api.model
     def action_open_account_onboarding_sale_tax(self):
         """ Onboarding step for the invoice layout. """
         action = self.env.ref('account.action_open_account_onboarding_sale_tax').read()[0]
@@ -538,13 +532,11 @@ Best Regards,'''))
         }
         return action
 
-    @api.multi
     def action_save_onboarding_invoice_layout(self):
         """ Set the onboarding step as done """
         if bool(self.logo) and self.logo != self._get_logo():
             self.set_onboarding_step_done('account_onboarding_invoice_layout_state')
 
-    @api.multi
     def action_save_onboarding_sale_tax(self):
         """ Set the onboarding step as done """
         self.set_onboarding_step_done('account_onboarding_sale_tax_state')

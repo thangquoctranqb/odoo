@@ -29,17 +29,17 @@ class EventType(models.Model):
         return [(0, 0, {
             'interval_unit': 'now',
             'interval_type': 'after_sub',
-            'template_id': self.env.ref('event.event_subscription')
+            'template_id': self.env.ref('event.event_subscription').id,
         }), (0, 0, {
             'interval_nbr': 1,
             'interval_unit': 'days',
             'interval_type': 'before_event',
-            'template_id': self.env.ref('event.event_reminder')
+            'template_id': self.env.ref('event.event_reminder').id,
         }), (0, 0, {
             'interval_nbr': 10,
             'interval_unit': 'days',
             'interval_type': 'before_event',
-            'template_id': self.env.ref('event.event_reminder')
+            'template_id': self.env.ref('event.event_reminder').id,
         })]
 
     name = fields.Char('Event Category', required=True, translate=True)
@@ -108,36 +108,36 @@ class EventEvent(models.Model):
     organizer_id = fields.Many2one(
         'res.partner', string='Organizer',
         tracking=True,
-        default=lambda self: self.env.company.partner_id)
+        default=lambda self: self.env.company.partner_id,
+        domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]")
     event_type_id = fields.Many2one(
         'event.type', string='Category',
-        readonly=False, states={'done': [('readonly', True)]},
-        oldname='type')
+        readonly=False, states={'done': [('readonly', True)]})
     color = fields.Integer('Kanban Color Index')
     event_mail_ids = fields.One2many('event.mail', 'event_id', string='Mail Schedule', copy=True)
 
     # Seats and computation
     seats_max = fields.Integer(
-        string='Maximum Attendees Number', oldname='register_max',
+        string='Maximum Attendees Number',
         readonly=True, states={'draft': [('readonly', False)], 'confirm': [('readonly', False)]},
         help="For each event you can define a maximum registration of seats(number of attendees), above this numbers the registrations are not accepted.")
     seats_availability = fields.Selection(
         [('limited', 'Limited'), ('unlimited', 'Unlimited')],
         'Maximum Attendees', required=True, default='unlimited')
     seats_min = fields.Integer(
-        string='Minimum Attendees', oldname='register_min',
+        string='Minimum Attendees',
         help="For each event you can define a minimum reserved seats (number of attendees), if it does not reach the mentioned registrations the event can not be confirmed (keep 0 to ignore this rule)")
     seats_reserved = fields.Integer(
-        oldname='register_current', string='Reserved Seats',
+        string='Reserved Seats',
         store=True, readonly=True, compute='_compute_seats')
     seats_available = fields.Integer(
-        oldname='register_avail', string='Available Seats',
+        string='Available Seats',
         store=True, readonly=True, compute='_compute_seats')
     seats_unconfirmed = fields.Integer(
-        oldname='register_prospect', string='Unconfirmed Seat Reservations',
+        string='Unconfirmed Seat Reservations',
         store=True, readonly=True, compute='_compute_seats')
     seats_used = fields.Integer(
-        oldname='register_attended', string='Number of Participants',
+        string='Number of Participants',
         store=True, readonly=True, compute='_compute_seats')
     seats_expected = fields.Integer(
         string='Number of Expected Attendees',
@@ -169,11 +169,12 @@ class EventEvent(models.Model):
         'res.partner', string='Location',
         default=lambda self: self.env.company.partner_id,
         readonly=False, states={'done': [('readonly', True)]},
+        domain="['|', ('company_id', '=', False), ('company_id', '=', company_id)]",
         tracking=True)
     country_id = fields.Many2one('res.country', 'Country',  related='address_id.country_id', store=True, readonly=False)
     twitter_hashtag = fields.Char('Twitter Hashtag')
     description = fields.Html(
-        string='Description', oldname='note', translate=html_translate, sanitize_attributes=False,
+        string='Description', translate=html_translate, sanitize_attributes=False,
         readonly=False, states={'done': [('readonly', True)]})
     # badge fields
     badge_front = fields.Html(string='Badge Front')
@@ -182,7 +183,6 @@ class EventEvent(models.Model):
     badge_innerright = fields.Html(string='Badge Inner Right')
     event_logo = fields.Html(string='Event Logo')
 
-    @api.multi
     @api.depends('seats_max', 'registration_ids.state')
     def _compute_seats(self):
         """ Determine reserved, available, reserved but unconfirmed and used seats. """
@@ -201,6 +201,7 @@ class EventEvent(models.Model):
                         WHERE event_id IN %s AND state IN ('draft', 'open', 'done')
                         GROUP BY event_id, state
                     """
+            self.env['event.registration'].flush(['event_id', 'state'])
             self._cr.execute(query, (tuple(self.ids),))
             for event_id, state, num in self._cr.fetchall():
                 event = self.browse(event_id)
@@ -281,7 +282,6 @@ class EventEvent(models.Model):
             if event.date_end < event.date_begin:
                 raise ValidationError(_('The closing date cannot be earlier than the beginning date.'))
 
-    @api.multi
     @api.depends('name', 'date_begin', 'date_end')
     def name_get(self):
         result = []
@@ -302,14 +302,12 @@ class EventEvent(models.Model):
             res.button_confirm()
         return res
 
-    @api.multi
     def write(self, vals):
         res = super(EventEvent, self).write(vals)
         if vals.get('organizer_id'):
             self.message_subscribe([vals['organizer_id']])
         return res
 
-    @api.multi
     @api.returns('self', lambda value: value.id)
     def copy(self, default=None):
         self.ensure_one()
@@ -319,7 +317,6 @@ class EventEvent(models.Model):
     def button_draft(self):
         self.write({'state': 'draft'})
 
-    @api.multi
     def button_cancel(self):
         if any('done' in event.mapped('registration_ids.state') for event in self):
             raise UserError(_("There are already attendees who attended this event. Please reset it to draft if you want to cancel this event."))
@@ -337,11 +334,9 @@ class EventEvent(models.Model):
             for attendee in event.registration_ids.filtered(filter_func):
                 self.env['mail.template'].browse(template_id).send_mail(attendee.id, force_send=force_send)
 
-    @api.multi
     def _is_event_registrable(self):
         return self.date_end > fields.Datetime.now()
 
-    @api.multi
     def _get_ics_file(self):
         """ Returns iCalendar file for the event invitation.
             :returns a dict of .ics file content for each event
@@ -371,15 +366,22 @@ class EventRegistration(models.Model):
     _inherit = ['mail.thread', 'mail.activity.mixin']
     _order = 'name, create_date desc'
 
+    # event
     origin = fields.Char(
         string='Source Document', readonly=True,
         help="Reference of the document that created the registration, for example a sales order")
     event_id = fields.Many2one(
         'event.event', string='Event', required=True,
         readonly=True, states={'draft': [('readonly', False)]})
+    # attendee
     partner_id = fields.Many2one(
         'res.partner', string='Contact',
         states={'done': [('readonly', True)]})
+    name = fields.Char(string='Attendee Name', index=True)
+    email = fields.Char(string='Email')
+    phone = fields.Char(string='Phone')
+    mobile = fields.Char(string='Mobile')
+    # organization
     date_open = fields.Datetime(string='Registration Date', readonly=True, default=lambda self: fields.Datetime.now())  # weird crash is directly now
     date_closed = fields.Datetime(string='Attended Date', readonly=True)
     event_begin_date = fields.Datetime(string="Event Start Date", related='event_id.date_begin', readonly=True)
@@ -391,9 +393,6 @@ class EventRegistration(models.Model):
         ('draft', 'Unconfirmed'), ('cancel', 'Cancelled'),
         ('open', 'Confirmed'), ('done', 'Attended')],
         string='Status', default='draft', readonly=True, copy=False, tracking=True)
-    email = fields.Char(string='Email')
-    phone = fields.Char(string='Phone')
-    name = fields.Char(string='Attendee Name', index=True)
 
     @api.constrains('event_id', 'state')
     def _check_seats_limit(self):
@@ -401,7 +400,6 @@ class EventRegistration(models.Model):
             if registration.event_id.seats_availability == 'limited' and registration.event_id.seats_max and registration.event_id.seats_available < (1 if registration.state == 'draft' else 0):
                 raise ValidationError(_('No more seats available for this event.'))
 
-    @api.multi
     def _check_auto_confirmation(self):
         if self._context.get('registration_force_draft'):
             return False
@@ -429,6 +427,7 @@ class EventRegistration(models.Model):
         data = {
             'name': registration.get('name', partner_id.name),
             'phone': registration.get('phone', partner_id.phone),
+            'mobile': registration.get('mobile', partner_id.mobile),
             'email': registration.get('email', partner_id.email),
             'partner_id': partner_id.id,
             'event_id': event_id and event_id.id or False,
@@ -470,8 +469,8 @@ class EventRegistration(models.Model):
                 self.name = contact.name or self.name
                 self.email = contact.email or self.email
                 self.phone = contact.phone or self.phone
+                self.mobile = contact.mobile or self.mobile
 
-    @api.multi
     def _message_get_suggested_recipients(self):
         recipients = super(EventRegistration, self)._message_get_suggested_recipients()
         public_users = self.env['res.users'].sudo()
@@ -489,7 +488,6 @@ class EventRegistration(models.Model):
             pass
         return recipients
 
-    @api.multi
     def _message_get_default_recipients(self):
         # Prioritize registration email over partner_id, which may be shared when a single
         # partner booked multiple seats
@@ -513,7 +511,6 @@ class EventRegistration(models.Model):
                 ]).write({'partner_id': new_partner.id})
         return super(EventRegistration, self)._message_post_after_hook(message, msg_vals)
 
-    @api.multi
     def action_send_badge_email(self):
         """ Open a window to compose an email, with the template - 'event_badge'
             message loaded by default
@@ -540,7 +537,6 @@ class EventRegistration(models.Model):
             'context': ctx,
         }
 
-    @api.multi
     def get_date_range_str(self):
         self.ensure_one()
         today = fields.Datetime.now()
@@ -559,7 +555,6 @@ class EventRegistration(models.Model):
         else:
             return _('on ') + format_datetime(self.env, self.event_begin_date, tz=self.event_id.date_tz, dt_format='medium')
 
-    @api.multi
     def summary(self):
         self.ensure_one()
         return {'information': []}
