@@ -304,7 +304,7 @@ class AccountInvoice(models.Model):
              "means direct payment.")
     partner_id = fields.Many2one('res.partner', string='Partner', change_default=True,
         readonly=True, states={'draft': [('readonly', False)]},
-        track_visibility='always', help="You can find a contact by its Name, TIN, Email or Internal Reference.")
+        track_visibility='always', ondelete='restrict', help="You can find a contact by its Name, TIN, Email or Internal Reference.")
     vendor_bill_id = fields.Many2one('account.invoice', string='Vendor Bill',
         help="Auto-complete from a past bill.")
     payment_term_id = fields.Many2one('account.payment.term', string='Payment Terms', oldname='payment_term',
@@ -1853,7 +1853,7 @@ class AccountInvoiceLine(models.Model):
                 default_tax = self.invoice_id.company_id.account_sale_tax_id
             else:
                 default_tax = self.invoice_id.company_id.account_purchase_tax_id
-            self.invoice_line_tax_ids = fpos.map_tax(self.account_id.tax_ids or default_tax, partner=self.partner_id).ids
+            self.invoice_line_tax_ids = fpos.map_tax(self.account_id.tax_ids or default_tax, partner=self.partner_id)
         elif not self.price_unit:
             self._set_taxes()
 
@@ -1926,7 +1926,7 @@ class AccountInvoiceLine(models.Model):
     @api.multi
     def write(self, values):
         if 'display_type' in values and self.filtered(lambda line: line.display_type != values.get('display_type')):
-            raise UserError("You cannot change the type of an invoice line. Instead you should delete the current line and create a new line of the proper type.")
+            raise UserError(_("You cannot change the type of an invoice line. Instead you should delete the current line and create a new line of the proper type."))
         return super(AccountInvoiceLine, self).write(values)
 
     _sql_constraints = [

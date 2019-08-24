@@ -601,9 +601,13 @@ class account_payment(models.Model):
             for move in rec.move_line_ids.mapped('move_id'):
                 if rec.invoice_ids:
                     move.line_ids.remove_move_reconcile()
-                move.button_cancel()
+                if move.state != 'draft':
+                    move.button_cancel()
                 move.unlink()
-            rec.state = 'cancelled'
+            rec.write({
+                'state': 'cancelled',
+                'move_name': False,
+            })
 
     @api.multi
     def unlink(self):

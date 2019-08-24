@@ -10,6 +10,7 @@
 # Martin Trigaux, 2018
 # David Vidal <david.vidal@trespinos.es>, 2019
 # Luis Guzman <ark@switnet.org>, 2019
+# Jesús Alan Ramos Rodríguez <alan.ramos@jarsa.com.mx>, 2019
 # Pedro M. Baeza <pedro.baeza@gmail.com>, 2019
 # 
 msgid ""
@@ -96,7 +97,7 @@ msgstr "<b>Establecer imagen personalizada...</b>"
 #. module: point_of_sale
 #: model_terms:ir.ui.view,arch_db:point_of_sale.view_pos_config_kanban
 msgid "<i class=\"fa fa-ellipsis-v\" role=\"img\" aria-label=\"Manage\" title=\"Manage\"/>"
-msgstr ""
+msgstr "<i class=\"fa fa-ellipsis-v\" role=\"img\" aria-label=\"Manage\" title=\"Manage\"/>"
 
 #. module: point_of_sale
 #: model_terms:ir.ui.view,arch_db:point_of_sale.customer_facing_display_snippets
@@ -243,7 +244,7 @@ msgstr "<span>Última Fecha de Cierre</span>"
 #. module: point_of_sale
 #: model_terms:ir.ui.view,arch_db:point_of_sale.view_pos_config_kanban
 msgid "<span>Reporting</span>"
-msgstr "<span>Reportería</span>"
+msgstr "<span>Informes</span>"
 
 #. module: point_of_sale
 #: model_terms:ir.ui.view,arch_db:point_of_sale.view_pos_config_kanban

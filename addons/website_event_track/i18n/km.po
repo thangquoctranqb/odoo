@@ -368,7 +368,7 @@ msgstr "ព្រិត្តិការណ៍"
 #. module: website_event_track
 #: model:ir.model,name:website_event_track.model_event_type
 msgid "Event Category"
-msgstr ""
+msgstr "ប្រភេទព្រឹត្តិការណ៍"
 
 #. module: website_event_track
 #: model_terms:ir.ui.view,arch_db:website_event_track.view_event_location_form
@@ -493,7 +493,7 @@ msgstr "សកម្មភាពទៅមុខ"
 #. module: website_event_track
 #: model:event.sponsor.type,name:website_event_track.event_sponsor_type3
 msgid "Gold"
-msgstr ""
+msgstr "មាស"
 
 #. module: website_event_track
 #: selection:event.track,kanban_state:0
@@ -616,7 +616,7 @@ msgstr "ត្រូវតាមអ្នក"
 #. module: website_event_track
 #: model:ir.model.fields,field_description:website_event_track.field_event_track__is_published
 msgid "Is published"
-msgstr ""
+msgstr "ត្រូវបានផ្សព្វផ្សាយ"
 
 #. module: website_event_track
 #: model:ir.model.fields,field_description:website_event_track.field_event_track__kanban_state
@@ -674,7 +674,7 @@ msgstr ""
 #. module: website_event_track
 #: model:ir.ui.menu,name:website_event_track.menu_event_track_location
 msgid "Locations"
-msgstr ""
+msgstr "ទីតាំង"
 
 #. module: website_event_track
 #: model:ir.model.fields,field_description:website_event_track.field_event_sponsor__image_medium
@@ -891,12 +891,12 @@ msgstr ""
 #. module: website_event_track
 #: selection:event.track,kanban_state:0
 msgid "Red"
-msgstr ""
+msgstr "ក្រហម"
 
 #. module: website_event_track
 #: model:event.track.stage,name:website_event_track.event_track_stage4
 msgid "Refused"
-msgstr ""
+msgstr "បដិសេធ"
 
 #. module: website_event_track
 #: model:ir.model.fields,field_description:website_event_track.field_event_track__user_id
@@ -1103,7 +1103,7 @@ msgstr ""
 #. module: website_event_track
 #: model:ir.model.fields,help:website_event_track.field_event_track__website_url
 msgid "The full URL to access the document through the website."
-msgstr ""
+msgstr "URL ពេញលេញដើម្បីចូលប្រើឯកសារតាមរយៈគេហទំព័រ។"
 
 #. module: website_event_track
 #: model:event.track,name:website_event_track.event_track17
@@ -1127,6 +1127,7 @@ msgid ""
 "This stage is folded in the kanban view when there are no records in that "
 "stage to display."
 msgstr ""
+"ដំណាក់កាលនេះត្រូវបានបត់នៅក្នុងទិដ្ឋភាពKanbanនៅពេលដែលមិនមានកំណត់ត្រានៅក្នុងដំណាក់កាលនោះដើម្បីបង្ហាញ។"
 
 #. module: website_event_track
 #: model_terms:ir.ui.view,arch_db:website_event_track.event_track_proposal
@@ -1268,7 +1269,7 @@ msgstr ""
 #. module: website_event_track
 #: model:ir.model.fields,field_description:website_event_track.field_event_track__website_published
 msgid "Visible on current website"
-msgstr ""
+msgstr "អាចមើលឃើញនៅលើគេហទំព័របច្ចុប្បន្ន។"
 
 #. module: website_event_track
 #: model_terms:ir.ui.view,arch_db:website_event_track.event_track_proposal
@@ -1305,7 +1306,7 @@ msgstr "សារវែបសាយ"
 #. module: website_event_track
 #: model:ir.model.fields,field_description:website_event_track.field_event_track__website_url
 msgid "Website URL"
-msgstr ""
+msgstr "គេហទំព័រ URL "
 
 #. module: website_event_track
 #: model:ir.model.fields,help:website_event_track.field_event_track__website_message_ids
@@ -1356,7 +1357,7 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:website_event_track.view_event_track_form
 #: model_terms:ir.ui.view,arch_db:website_event_track.view_event_track_kanban
 msgid "hours"
-msgstr ""
+msgstr "ម៉ោង"
 
 #. module: website_event_track
 #: model_terms:ir.ui.view,arch_db:website_event_track.agenda

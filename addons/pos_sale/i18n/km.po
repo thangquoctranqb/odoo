@@ -138,7 +138,7 @@ msgstr "ការលក់"
 #. module: pos_sale
 #: model:ir.model,name:pos_sale.model_sale_report
 msgid "Sales Analysis Report"
-msgstr ""
+msgstr "ឯកសារនៃការវិភាគការលក់"
 
 #. module: pos_sale
 #: model:ir.model,name:pos_sale.model_crm_team
@@ -153,7 +153,7 @@ msgstr ""
 #. module: pos_sale
 #: selection:sale.report,state:0
 msgid "Sales Order"
-msgstr ""
+msgstr "លក់តាមការបញ្ជាទិញ"
 
 #. module: pos_sale
 #: model:ir.model.fields,field_description:pos_sale.field_pos_config__crm_team_id
